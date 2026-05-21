@@ -45,11 +45,11 @@ public class BranchController {
     /**
      * GET /api/v1/branches
      * Returns all branches with their current stock summaries.
-     * Accessible by HO_ADMIN and ADMIN.
+     * Accessible by authenticated users.
      * FR-08
      */
     @GetMapping
-    @PreAuthorize("hasAnyRole('ADMIN', 'HO_ADMIN')")
+    @PreAuthorize("isAuthenticated()")
     public ResponseEntity<ApiResponse<List<BranchSummaryResponse>>> getAllBranches() {
         List<BranchSummaryResponse> branches = branchService.getAllBranches();
         return ResponseEntity.ok(ApiResponse.success(branches));
@@ -60,7 +60,7 @@ public class BranchController {
      * Returns details of a specific branch.
      */
     @GetMapping("/{id}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'HO_ADMIN')")
+    @PreAuthorize("isAuthenticated()")
     public ResponseEntity<ApiResponse<BranchResponse>> getBranchById(@PathVariable Long id) {
         BranchResponse branch = branchService.getBranchById(id);
         return ResponseEntity.ok(ApiResponse.success(branch));
