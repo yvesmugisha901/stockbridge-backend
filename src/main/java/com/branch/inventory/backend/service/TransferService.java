@@ -41,6 +41,8 @@ public class TransferService {
         @Value("${app.approval.value-threshold:500000}")
         private BigDecimal valueThreshold;
 
+        // ─── Create ──────────────────────────────────────────────────────────────
+
         @Transactional
         public TransferResponse createTransfer(CreateTransferRequest request, String email) {
                 User requester = getUser(email);
@@ -94,6 +96,13 @@ public class TransferService {
                 return mapToResponse(saved);
         }
 
+        // ─── Read ─────────────────────────────────────────────────────────────────
+
+        /**
+         * Returns all transfers visible to the current user, with optional filters.
+         * Role-based visibility is handled in the repository query (findByFilters).
+         * FR-26, FR-30, FR-31, FR-32
+         */
         @Transactional(readOnly = true)
         public Page<TransferResponse> getTransfers(String email, Long branchId, String status,
                         Long itemId, String fromDate, String toDate, Pageable pageable) {
@@ -107,11 +116,30 @@ public class TransferService {
                                 .map(this::mapToResponse);
         }
 
+        /**
+         * Returns only the transfers submitted by the logged-in user.
+         * Used by the STAFF and MANAGER "My Transfers" page.
+         * FR-14, FR-21
+         */
+        @Transactional(readOnly = true)
+        public Page<TransferResponse> getMyTransfers(String email, Pageable pageable) {
+                User user = getUser(email);
+                return transferRequestRepository
+                                .findByRequestedBy(user, pageable)
+                                .map(this::mapToResponse);
+        }
+
         @Transactional(readOnly = true)
         public TransferResponse getTransferById(Long id, String email) {
                 return mapToResponse(getTransfer(id));
         }
 
+        // ─── Status Transitions ───────────────────────────────────────────────────
+
+        /**
+         * FR-18: Source branch marks transfer as dispatched.
+         * Valid from: HO_APPROVED or MANAGER_APPROVED (single-tier).
+         */
         @Transactional
         public TransferResponse markInTransit(Long id, String email) {
                 TransferRequest transfer = getTransfer(id);
@@ -125,6 +153,10 @@ public class TransferService {
                 return mapToResponse(transfer);
         }
 
+        /**
+         * FR-19: Destination branch confirms receipt.
+         * Triggers stock level updates on both branches.
+         */
         @Transactional
         public TransferResponse confirmReceipt(Long id, String email) {
                 TransferRequest transfer = getTransfer(id);
@@ -165,6 +197,10 @@ public class TransferService {
                 return mapToResponse(transfer);
         }
 
+        /**
+         * FR-20: Requester cancels a PENDING transfer.
+         * Releases the reserved stock. No stock movement occurs.
+         */
         @Transactional
         public TransferResponse cancelTransfer(Long id, String email) {
                 TransferRequest transfer = getTransfer(id);
@@ -184,6 +220,8 @@ public class TransferService {
                                 "Cancelled by requester");
                 return mapToResponse(transfer);
         }
+
+        // ─── Helpers ──────────────────────────────────────────────────────────────
 
         private void assertStatus(TransferRequest transfer, TransferStatus... allowed) {
                 for (TransferStatus s : allowed) {

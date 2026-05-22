@@ -37,7 +37,6 @@ public class TransferController {
     /**
      * POST /api/v1/transfers
      * STAFF or MANAGER submits a new transfer request.
-     * System validates stock, calculates value, and determines approval tier.
      * FR-14, FR-15
      */
     @PostMapping
@@ -53,8 +52,7 @@ public class TransferController {
 
     /**
      * GET /api/v1/transfers
-     * Returns paginated transfer list filtered by branch, status, item, and date
-     * range.
+     * Returns paginated transfer list filtered by branch, status, item, date range.
      * Visibility is role-filtered in the service layer.
      * FR-26, FR-30, FR-31, FR-32
      */
@@ -74,8 +72,24 @@ public class TransferController {
     }
 
     /**
+     * GET /api/v1/transfers/my
+     * Returns paginated list of transfers submitted by the logged-in user.
+     * MUST be declared before /{id} to prevent "my" being parsed as a Long.
+     * FR-14, FR-21
+     */
+    @GetMapping("/my")
+    @PreAuthorize("hasAnyRole('STAFF', 'MANAGER')")
+    public ResponseEntity<ApiResponse<Page<TransferResponse>>> getMyTransfers(
+            @AuthenticationPrincipal UserDetails currentUser,
+            Pageable pageable) {
+        Page<TransferResponse> transfers = transferService.getMyTransfers(
+                currentUser.getUsername(), pageable);
+        return ResponseEntity.ok(ApiResponse.success(transfers));
+    }
+
+    /**
      * GET /api/v1/transfers/{id}
-     * Returns full details of a specific transfer request including audit trail.
+     * Returns full details of a specific transfer including audit trail.
      * FR-21
      */
     @GetMapping("/{id}")
@@ -90,7 +104,7 @@ public class TransferController {
     /**
      * PATCH /api/v1/transfers/{id}/mark-in-transit
      * Source branch STAFF marks the transfer as In Transit after physical dispatch.
-     * Requires status = HO_APPROVED (or MANAGER_APPROVED for single-tier).
+     * Requires status = HO_APPROVED or MANAGER_APPROVED.
      * FR-18
      */
     @PatchMapping("/{id}/mark-in-transit")
@@ -104,7 +118,7 @@ public class TransferController {
 
     /**
      * PATCH /api/v1/transfers/{id}/confirm-receipt
-     * Destination branch STAFF confirms receipt, triggering automatic stock level
+     * Destination branch STAFF confirms receipt, triggering automatic stock
      * updates.
      * FR-19
      */
