@@ -34,7 +34,7 @@ public class AuthService {
         UserDetails userDetails = userDetailsService.loadUserByUsername(request.getEmail());
         String token = jwtUtil.generateToken(userDetails);
 
-        User user = userRepository.findByEmail(request.getEmail())
+        User user = userRepository.findByEmailWithBranch(request.getEmail())
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
         return AuthResponse.builder()

@@ -40,7 +40,7 @@ public class UserService {
                 .fullName(request.getFullName())
                 .email(request.getEmail())
                 .passwordHash(passwordEncoder.encode(request.getPassword()))
-                .role(request.getRole()) // Role enum assigned directly — no valueOf() needed
+                .role(request.getRole())
                 .branch(branch)
                 .active(true)
                 .build();
@@ -50,19 +50,19 @@ public class UserService {
 
     @Transactional(readOnly = true)
     public Page<UserResponse> getAllUsers(Pageable pageable) {
-        return userRepository.findAll(pageable).map(this::mapToResponse);
+        return userRepository.findAllWithBranch(pageable).map(this::mapToResponse);
     }
 
     @Transactional(readOnly = true)
     public UserResponse getUserById(Long id) {
-        User user = userRepository.findById(id)
+        User user = userRepository.findByIdWithBranch(id)
                 .orElseThrow(() -> new RuntimeException("User not found: " + id));
         return mapToResponse(user);
     }
 
     @Transactional
     public UserResponse updateUser(Long id, UpdateUserRequest request) {
-        User user = userRepository.findById(id)
+        User user = userRepository.findByIdWithBranch(id)
                 .orElseThrow(() -> new RuntimeException("User not found: " + id));
 
         if (request.getFullName() != null)
@@ -70,7 +70,7 @@ public class UserService {
         if (request.getEmail() != null)
             user.setEmail(request.getEmail());
         if (request.getRole() != null)
-            user.setRole(request.getRole()); // Role enum assigned directly — no valueOf() needed
+            user.setRole(request.getRole());
 
         if (request.getBranchId() != null) {
             Branch branch = branchRepository.findById(request.getBranchId())
@@ -84,7 +84,7 @@ public class UserService {
 
     @Transactional
     public void deactivateUser(Long id) {
-        User user = userRepository.findById(id)
+        User user = userRepository.findByIdWithBranch(id)
                 .orElseThrow(() -> new RuntimeException("User not found: " + id));
         user.setActive(false);
         userRepository.save(user);
@@ -92,10 +92,25 @@ public class UserService {
 
     @Transactional
     public void activateUser(Long id) {
-        User user = userRepository.findById(id)
+        User user = userRepository.findByIdWithBranch(id)
                 .orElseThrow(() -> new RuntimeException("User not found: " + id));
         user.setActive(true);
         userRepository.save(user);
+    }
+
+    @Transactional(readOnly = true)
+    public UserResponse getByEmail(String email) {
+        User user = userRepository.findByEmailWithBranch(email)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        return mapToResponse(user);
+    }
+
+    @Transactional
+    public UserResponse updateProfile(String email, UpdateProfileRequest request) {
+        User user = userRepository.findByEmailWithBranch(email)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        user.setFullName(request.getName());
+        return mapToResponse(userRepository.save(user));
     }
 
     private UserResponse mapToResponse(User user) {
@@ -108,18 +123,5 @@ public class UserService {
                 .branchName(user.getBranch() != null ? user.getBranch().getName() : null)
                 .active(user.isActive())
                 .build();
-    }
-
-    public UserResponse getByEmail(String email) {
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
-        return mapToResponse(user); // ← use mapToResponse, not toResponse
-    }
-
-    public UserResponse updateProfile(String email, UpdateProfileRequest request) {
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
-        user.setFullName(request.getName()); // ← was setName(), your model uses setFullName()
-        return mapToResponse(userRepository.save(user)); // ← use mapToResponse
     }
 }
