@@ -1,6 +1,7 @@
 package com.branch.inventory.backend.controller;
 
 import com.branch.inventory.backend.dto.request.CreateUserRequest;
+import com.branch.inventory.backend.dto.request.UpdateProfileRequest;
 import com.branch.inventory.backend.dto.request.UpdateUserRequest;
 import com.branch.inventory.backend.dto.response.ApiResponse;
 import com.branch.inventory.backend.dto.response.UserResponse;
@@ -12,7 +13,9 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 
 /**
  * UserController – manages user accounts.
@@ -98,5 +101,22 @@ public class UserController {
     public ResponseEntity<ApiResponse<String>> activateUser(@PathVariable Long id) {
         userService.activateUser(id);
         return ResponseEntity.ok(ApiResponse.success("User activated successfully."));
+    }
+
+    // GET /api/v1/users/me
+    @GetMapping("/me")
+    public ResponseEntity<ApiResponse<UserResponse>> getMe(
+            @AuthenticationPrincipal UserDetails userDetails) {
+        UserResponse user = userService.getByEmail(userDetails.getUsername());
+        return ResponseEntity.ok(ApiResponse.success(user));
+    }
+
+    // PUT /api/v1/users/me
+    @PutMapping("/me")
+    public ResponseEntity<ApiResponse<UserResponse>> updateMe(
+            @AuthenticationPrincipal UserDetails userDetails,
+            @Valid @RequestBody UpdateProfileRequest request) {
+        UserResponse updated = userService.updateProfile(userDetails.getUsername(), request);
+        return ResponseEntity.ok(ApiResponse.success(updated));
     }
 }

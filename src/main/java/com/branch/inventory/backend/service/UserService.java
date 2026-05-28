@@ -1,6 +1,7 @@
 package com.branch.inventory.backend.service;
 
 import com.branch.inventory.backend.dto.request.CreateUserRequest;
+import com.branch.inventory.backend.dto.request.UpdateProfileRequest;
 import com.branch.inventory.backend.dto.request.UpdateUserRequest;
 import com.branch.inventory.backend.dto.response.UserResponse;
 import com.branch.inventory.backend.model.Branch;
@@ -107,5 +108,18 @@ public class UserService {
                 .branchName(user.getBranch() != null ? user.getBranch().getName() : null)
                 .active(user.isActive())
                 .build();
+    }
+
+    public UserResponse getByEmail(String email) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        return mapToResponse(user); // ← use mapToResponse, not toResponse
+    }
+
+    public UserResponse updateProfile(String email, UpdateProfileRequest request) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        user.setFullName(request.getName()); // ← was setName(), your model uses setFullName()
+        return mapToResponse(userRepository.save(user)); // ← use mapToResponse
     }
 }
