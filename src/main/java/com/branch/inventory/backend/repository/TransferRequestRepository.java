@@ -13,6 +13,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 @Repository
 public interface TransferRequestRepository extends JpaRepository<TransferRequest, Long> {
@@ -89,4 +90,28 @@ public interface TransferRequestRepository extends JpaRepository<TransferRequest
                         @Param("from") LocalDate from,
                         @Param("to") LocalDate to,
                         Pageable pageable);
+
+        // Used by AdminService.getRecentActivity()
+        // Pass PageRequest.of(0, 20) from the service to control the row count.
+        // If Spring throws SQLSyntaxErrorException, run: DESCRIBE transfer_requests;
+        // and check column names: requested_by_id, source_branch_id,
+        // destination_branch_id, requested_at
+        @Query(value = """
+                        SELECT
+                            t.id                     AS id,
+                            t.status                 AS type,
+                            t.requested_at           AS timestamp,
+                            u.full_name              AS user,
+                            sb.name                  AS sourceBranch,
+                            db.name                  AS destinationBranch,
+                            i.name                   AS item,
+                            t.quantity               AS quantity
+                        FROM transfer_requests t
+                        JOIN users u     ON t.requested_by_id        = u.id
+                        JOIN branches sb ON t.source_branch_id       = sb.id
+                        JOIN branches db ON t.destination_branch_id  = db.id
+                        JOIN items i     ON t.item_id                = i.id
+                        ORDER BY t.requested_at DESC
+                        """, countQuery = "SELECT COUNT(*) FROM transfer_requests", nativeQuery = true)
+        List<Map<String, Object>> findRecentActivity(Pageable pageable);
 }

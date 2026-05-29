@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -24,9 +25,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Query("SELECT u FROM User u LEFT JOIN FETCH u.branch")
     Page<User> findAllWithBranch(Pageable pageable);
 
-    Optional<User> findByEmail(String email); // used by AuthService, UserDetailsService
+    Optional<User> findByEmail(String email);
 
-    boolean existsByEmail(String email); // used by UserService.createUser()
+    boolean existsByEmail(String email);
 
     List<User> findByRole(Role role);
 
@@ -37,4 +38,7 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByActiveFalse();
 
     List<User> findByRoleAndBranchId(Role role, Long branchId);
+
+    // Used by AdminService.getStats() — counts users created this calendar month
+    long countByCreatedAtAfter(LocalDateTime date);
 }
