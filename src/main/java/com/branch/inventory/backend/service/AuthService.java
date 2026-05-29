@@ -31,11 +31,14 @@ public class AuthService {
                         request.getEmail(),
                         request.getPassword()));
 
-        UserDetails userDetails = userDetailsService.loadUserByUsername(request.getEmail());
-        String token = jwtUtil.generateToken(userDetails);
-
+        // Fetch user first so fullName is available for the JWT
         User user = userRepository.findByEmailWithBranch(request.getEmail())
                 .orElseThrow(() -> new RuntimeException("User not found"));
+
+        UserDetails userDetails = userDetailsService.loadUserByUsername(request.getEmail());
+
+        // Pass user entity so fullName gets embedded in the token
+        String token = jwtUtil.generateToken(userDetails, user);
 
         return AuthResponse.builder()
                 .token(token)

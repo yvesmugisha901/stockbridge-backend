@@ -1,5 +1,6 @@
 package com.branch.inventory.backend.security;
 
+import com.branch.inventory.backend.model.User;
 import io.jsonwebtoken.*;
 import io.jsonwebtoken.security.Keys;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,12 +26,24 @@ public class JwtUtil {
         return Keys.hmacShaKeyFor(secret.getBytes());
     }
 
+    // Original — still used by Spring Security internals
     public String generateToken(UserDetails userDetails) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("role", userDetails.getAuthorities().stream()
                 .findFirst()
                 .map(Object::toString)
                 .orElse(""));
+        return createToken(claims, userDetails.getUsername());
+    }
+
+    // New — called from AuthService so fullName gets into the JWT
+    public String generateToken(UserDetails userDetails, User user) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("role", userDetails.getAuthorities().stream()
+                .findFirst()
+                .map(Object::toString)
+                .orElse(""));
+        claims.put("fullName", user.getFullName());
         return createToken(claims, userDetails.getUsername());
     }
 
@@ -54,6 +67,10 @@ public class JwtUtil {
 
     public String extractRole(String token) {
         return extractClaim(token, claims -> claims.get("role", String.class));
+    }
+
+    public String extractFullName(String token) {
+        return extractClaim(token, claims -> claims.get("fullName", String.class));
     }
 
     public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
