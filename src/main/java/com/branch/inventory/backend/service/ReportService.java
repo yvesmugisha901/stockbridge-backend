@@ -1,5 +1,6 @@
 package com.branch.inventory.backend.service;
 
+import com.branch.inventory.backend.dto.response.StockLevelResponse;
 import com.branch.inventory.backend.model.StockLevel;
 import com.branch.inventory.backend.model.TransferRequest;
 import com.branch.inventory.backend.model.enums.TransferStatus;
@@ -21,13 +22,36 @@ public class ReportService {
     private final StockLevelRepository stockLevelRepository;
     private final TransferRequestRepository transferRequestRepository;
 
-    @Transactional(readOnly = true)
-    public Object getStockLevelReport(Long branchId, String category, Long itemId) {
-        return stockLevelRepository.findByFiltersForReport(branchId, itemId, category);
+    private StockLevelResponse toResponse(StockLevel s) {
+        return StockLevelResponse.builder()
+                .id(s.getId())
+                .branchId(s.getBranch().getId())
+                .branchName(s.getBranch().getName())
+                .itemId(s.getItem().getId())
+                .itemName(s.getItem().getName())
+                .itemCode(s.getItem().getCode())
+                .category(s.getItem().getCategory())
+                .quantityOnHand(s.getQuantityOnHand())
+                .reservedQuantity(s.getReservedQuantity())
+                .minimumThreshold(s.getMinimumThreshold())
+                .isLowStock(s.getQuantityOnHand() <= s.getMinimumThreshold())
+                .lastUpdated(s.getLastUpdated())
+                .build();
     }
 
     @Transactional(readOnly = true)
-    public byte[] exportStockLevelReportCsv(Long branchId, String category, Long itemId) {
+    public List<StockLevelResponse> getStockLevelReport(
+            Long branchId, String category, Long itemId) {
+        return stockLevelRepository
+                .findByFiltersForReport(branchId, itemId, category)
+                .stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public byte[] exportStockLevelReportCsv(
+            Long branchId, String category, Long itemId) {
         List<StockLevel> stocks = stockLevelRepository.findByFiltersForReport(branchId, itemId, category);
 
         StringWriter sw = new StringWriter();
@@ -51,8 +75,9 @@ public class ReportService {
     }
 
     @Transactional(readOnly = true)
-    public Object getTransferHistoryReport(Long branchId, String status,
-            Long itemId, String fromDate, String toDate) {
+    public Object getTransferHistoryReport(
+            Long branchId, String status, Long itemId,
+            String fromDate, String toDate) {
         LocalDate from = fromDate != null ? LocalDate.parse(fromDate) : null;
         LocalDate to = toDate != null ? LocalDate.parse(toDate) : null;
         TransferStatus ts = status != null ? TransferStatus.valueOf(status) : null;
@@ -60,14 +85,15 @@ public class ReportService {
     }
 
     @Transactional(readOnly = true)
-    public byte[] exportTransferHistoryReportCsv(Long branchId, String status,
-            Long itemId, String fromDate, String toDate) {
+    public byte[] exportTransferHistoryReportCsv(
+            Long branchId, String status, Long itemId,
+            String fromDate, String toDate) {
         LocalDate from = fromDate != null ? LocalDate.parse(fromDate) : null;
         LocalDate to = toDate != null ? LocalDate.parse(toDate) : null;
         TransferStatus ts = status != null ? TransferStatus.valueOf(status) : null;
 
-        List<TransferRequest> transfers = transferRequestRepository
-                .findForHistoryReport(branchId, ts, itemId, from, to);
+        List<TransferRequest> transfers = transferRequestRepository.findForHistoryReport(branchId, ts, itemId, from,
+                to);
 
         StringWriter sw = new StringWriter();
         PrintWriter pw = new PrintWriter(sw);
@@ -89,10 +115,11 @@ public class ReportService {
     }
 
     @Transactional(readOnly = true)
-    public Object getLowStockReport(Long branchId, String category) {
-        return branchId != null
+    public List<StockLevelResponse> getLowStockReport(Long branchId, String category) {
+        List<StockLevel> stocks = branchId != null
                 ? stockLevelRepository.findLowStockByBranchAndCategory(branchId, category)
                 : stockLevelRepository.findAllLowStockByCategory(category);
+        return stocks.stream().map(this::toResponse).toList();
     }
 
     @Transactional(readOnly = true)

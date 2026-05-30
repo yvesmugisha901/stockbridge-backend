@@ -19,6 +19,7 @@ public class StockLevelResponse {
     private Long itemId;
     private String itemName;
     private String itemCode;
+    private String category;
     private Integer quantityOnHand;
     private Integer reservedQuantity;
     private Integer minimumThreshold;
