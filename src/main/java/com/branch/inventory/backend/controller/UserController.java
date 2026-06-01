@@ -81,6 +81,17 @@ public class UserController {
     }
 
     /**
+     * DELETE /api/v1/users/{id}
+     * Permanently deletes a user account. Admin only.
+     */
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<String>> deleteUser(@PathVariable Long id) {
+        userService.deleteUser(id);
+        return ResponseEntity.ok(ApiResponse.success("User deleted successfully."));
+    }
+
+    /**
      * PATCH /api/v1/users/{id}/deactivate
      * Deactivates a user account without deleting it.
      * FR-05

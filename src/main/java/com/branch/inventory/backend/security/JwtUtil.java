@@ -36,7 +36,7 @@ public class JwtUtil {
         return createToken(claims, userDetails.getUsername());
     }
 
-    // New — called from AuthService so fullName gets into the JWT
+    // Called from AuthService — embeds fullName + branchId into the JWT
     public String generateToken(UserDetails userDetails, User user) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("role", userDetails.getAuthorities().stream()
@@ -44,6 +44,8 @@ public class JwtUtil {
                 .map(Object::toString)
                 .orElse(""));
         claims.put("fullName", user.getFullName());
+        claims.put("branchId", user.getBranch() != null ? user.getBranch().getId() : null);
+        claims.put("branchName", user.getBranch() != null ? user.getBranch().getName() : null);
         return createToken(claims, userDetails.getUsername());
     }
 
@@ -71,6 +73,14 @@ public class JwtUtil {
 
     public String extractFullName(String token) {
         return extractClaim(token, claims -> claims.get("fullName", String.class));
+    }
+
+    public Long extractBranchId(String token) {
+        return extractClaim(token, claims -> claims.get("branchId", Long.class));
+    }
+
+    public String extractBranchName(String token) {
+        return extractClaim(token, claims -> claims.get("branchName", String.class));
     }
 
     public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {

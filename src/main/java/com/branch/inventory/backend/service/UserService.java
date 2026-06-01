@@ -67,19 +67,45 @@ public class UserService {
 
         if (request.getFullName() != null)
             user.setFullName(request.getFullName());
-        if (request.getEmail() != null)
+
+        if (request.getEmail() != null && !request.getEmail().equals(user.getEmail())) {
+            if (userRepository.existsByEmail(request.getEmail())) {
+                throw new RuntimeException("Email already in use: " + request.getEmail());
+            }
             user.setEmail(request.getEmail());
+        }
+
         if (request.getRole() != null)
             user.setRole(request.getRole());
 
-        if (request.getBranchId() != null) {
-            Branch branch = branchRepository.findById(request.getBranchId())
-                    .orElseThrow(() -> new RuntimeException(
-                            "Branch not found: " + request.getBranchId()));
-            user.setBranch(branch);
+        // ✅ Fixed: use containsKey-style check via a dedicated flag on the DTO,
+        // OR treat branchId explicitly:
+        // - branchId present + non-null → assign that branch
+        // - branchId present + null → unassign branch (set to null)
+        // UpdateUserRequest must have branchId as a nullable field (not primitive)
+        if (request.isBranchIdProvided()) {
+            if (request.getBranchId() == null) {
+                // Unassign branch
+                user.setBranch(null);
+            } else {
+                Branch branch = branchRepository.findById(request.getBranchId())
+                        .orElseThrow(() -> new RuntimeException(
+                                "Branch not found: " + request.getBranchId()));
+                user.setBranch(branch);
+            }
         }
 
         return mapToResponse(userRepository.save(user));
+    }
+
+    /**
+     * Permanently deletes a user by ID.
+     */
+    @Transactional
+    public void deleteUser(Long id) {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("User not found: " + id));
+        userRepository.delete(user);
     }
 
     @Transactional
