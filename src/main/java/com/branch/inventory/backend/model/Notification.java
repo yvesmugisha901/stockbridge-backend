@@ -7,7 +7,6 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "notifications")
 @Getter
-
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
@@ -31,11 +30,10 @@ public class Notification {
     @Column(nullable = false)
     private String type;
 
-    @Column(nullable = false)
+    @Column(name = "is_read", nullable = false)
     private boolean read;
 
     @Column(nullable = false)
-
     private LocalDateTime createdAt;
 
     @PrePersist

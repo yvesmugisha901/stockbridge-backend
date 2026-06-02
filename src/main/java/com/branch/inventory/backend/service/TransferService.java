@@ -7,6 +7,7 @@ import com.branch.inventory.backend.model.Item;
 import com.branch.inventory.backend.model.StockLevel;
 import com.branch.inventory.backend.model.TransferRequest;
 import com.branch.inventory.backend.model.User;
+import com.branch.inventory.backend.model.enums.Role;
 import com.branch.inventory.backend.model.enums.TransferStatus;
 import com.branch.inventory.backend.repository.BranchRepository;
 import com.branch.inventory.backend.repository.ItemRepository;
@@ -23,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -34,6 +36,7 @@ public class TransferService {
         private final ItemRepository itemRepository;
         private final UserRepository userRepository;
         private final AuditLogService auditLogService;
+        private final NotificationService notificationService;
 
         @Value("${app.approval.quantity-threshold:100}")
         private int quantityThreshold;
@@ -93,16 +96,27 @@ public class TransferService {
                 auditLogService.log("TRANSFER_CREATED", "TransferRequest", saved.getId(), email,
                                 "Transfer request created. Requires HO approval: " + requiresHoApproval);
 
+                // ── Notify approvers at the SOURCE branch ────────────────────────
+                String notifTitle = "Transfer Request #" + saved.getId() + " Needs Approval";
+                String notifMessage = requester.getFullName() + " requested " + request.getQuantity()
+                                + "x " + item.getName() + " from " + sourceBranch.getName()
+                                + " → " + destBranch.getName() + ".";
+
+                if (requiresHoApproval) {
+                        userRepository.findByRole(Role.HO_ADMIN)
+                                        .forEach(admin -> notificationService.send(admin.getId(),
+                                                        notifTitle, notifMessage, "TRANSFER_PENDING"));
+                } else {
+                        userRepository.findByBranchIdAndRole(sourceBranch.getId(), Role.MANAGER)
+                                        .forEach(manager -> notificationService.send(manager.getId(),
+                                                        notifTitle, notifMessage, "TRANSFER_PENDING"));
+                }
+
                 return mapToResponse(saved);
         }
 
         // ─── Read ─────────────────────────────────────────────────────────────────
 
-        /**
-         * Returns all transfers visible to the current user, with optional filters.
-         * Role-based visibility is handled in the repository query (findByFilters).
-         * FR-26, FR-30, FR-31, FR-32
-         */
         @Transactional(readOnly = true)
         public Page<TransferResponse> getTransfers(String email, Long branchId, String status,
                         Long itemId, String fromDate, String toDate, Pageable pageable) {
@@ -116,11 +130,6 @@ public class TransferService {
                                 .map(this::mapToResponse);
         }
 
-        /**
-         * Returns only the transfers submitted by the logged-in user.
-         * Used by the STAFF and MANAGER "My Transfers" page.
-         * FR-14, FR-21
-         */
         @Transactional(readOnly = true)
         public Page<TransferResponse> getMyTransfers(String email, Pageable pageable) {
                 User user = getUser(email);
@@ -136,13 +145,10 @@ public class TransferService {
 
         // ─── Status Transitions ───────────────────────────────────────────────────
 
-        /**
-         * FR-18: Source branch marks transfer as dispatched.
-         * Valid from: HO_APPROVED or MANAGER_APPROVED (single-tier).
-         */
         @Transactional
         public TransferResponse markInTransit(Long id, String email) {
-                TransferRequest transfer = getTransfer(id);
+                // Use eager fetch so requestedBy/item/branches are available for notification
+                TransferRequest transfer = getTransferWithDetails(id);
                 assertStatus(transfer, TransferStatus.HO_APPROVED, TransferStatus.MANAGER_APPROVED);
 
                 transfer.setStatus(TransferStatus.IN_TRANSIT);
@@ -150,16 +156,22 @@ public class TransferService {
                 transferRequestRepository.save(transfer);
 
                 auditLogService.log("MARKED_IN_TRANSIT", "TransferRequest", id, email, "Stock dispatched");
+
+                notificationService.send(
+                                transfer.getRequestedBy().getId(),
+                                "Transfer #" + id + " Is On Its Way",
+                                transfer.getQuantity() + "x " + transfer.getItem().getName()
+                                                + " has been dispatched from " + transfer.getSourceBranch().getName()
+                                                + ".",
+                                "TRANSFER_IN_TRANSIT");
+
                 return mapToResponse(transfer);
         }
 
-        /**
-         * FR-19: Destination branch confirms receipt.
-         * Triggers stock level updates on both branches.
-         */
         @Transactional
         public TransferResponse confirmReceipt(Long id, String email) {
-                TransferRequest transfer = getTransfer(id);
+                // Use eager fetch so requestedBy/item/branches are available for notification
+                TransferRequest transfer = getTransferWithDetails(id);
                 assertStatus(transfer, TransferStatus.IN_TRANSIT);
 
                 StockLevel sourceStock = stockLevelRepository
@@ -194,13 +206,18 @@ public class TransferService {
 
                 auditLogService.log("RECEIPT_CONFIRMED", "TransferRequest", id, email,
                                 "Stock received. Levels updated on both branches.");
+
+                notificationService.send(
+                                transfer.getRequestedBy().getId(),
+                                "Transfer #" + id + " Completed",
+                                transfer.getQuantity() + "x " + transfer.getItem().getName()
+                                                + " has been received at " + transfer.getDestinationBranch().getName()
+                                                + ".",
+                                "TRANSFER_RECEIVED");
+
                 return mapToResponse(transfer);
         }
 
-        /**
-         * FR-20: Requester cancels a PENDING transfer.
-         * Releases the reserved stock. No stock movement occurs.
-         */
         @Transactional
         public TransferResponse cancelTransfer(Long id, String email) {
                 TransferRequest transfer = getTransfer(id);
@@ -221,6 +238,62 @@ public class TransferService {
                 return mapToResponse(transfer);
         }
 
+        // ─── Approval ─────────────────────────────────────────────────────────────
+
+        @Transactional
+        public TransferResponse approveTransfer(Long id, String email) {
+                // Use eager fetch so requestedBy/item are loaded for notification
+                TransferRequest transfer = getTransferWithDetails(id);
+                assertStatus(transfer, TransferStatus.PENDING);
+
+                TransferStatus newStatus = transfer.isRequiresHoApproval()
+                                ? TransferStatus.HO_APPROVED
+                                : TransferStatus.MANAGER_APPROVED;
+
+                transfer.setStatus(newStatus);
+                transferRequestRepository.save(transfer);
+
+                auditLogService.log("TRANSFER_APPROVED", "TransferRequest", id, email, "Approved");
+
+                notificationService.send(
+                                transfer.getRequestedBy().getId(),
+                                "Transfer #" + id + " Approved",
+                                "Your request for " + transfer.getQuantity() + "x "
+                                                + transfer.getItem().getName() + " has been approved.",
+                                "TRANSFER_APPROVED");
+
+                return mapToResponse(transfer);
+        }
+
+        @Transactional
+        public TransferResponse rejectTransfer(Long id, String email, String reason) {
+                // Use eager fetch so requestedBy/item are loaded for notification
+                TransferRequest transfer = getTransferWithDetails(id);
+                assertStatus(transfer, TransferStatus.PENDING);
+
+                StockLevel stock = stockLevelRepository
+                                .findByBranchIdAndItemId(
+                                                transfer.getSourceBranch().getId(), transfer.getItem().getId())
+                                .orElseThrow(() -> new RuntimeException("Source stock record not found"));
+                stock.setReservedQuantity(stock.getReservedQuantity() - transfer.getQuantity());
+                stockLevelRepository.save(stock);
+
+                transfer.setStatus(TransferStatus.REJECTED);
+                transferRequestRepository.save(transfer);
+
+                auditLogService.log("TRANSFER_REJECTED", "TransferRequest", id, email,
+                                "Rejected. Reason: " + reason);
+
+                notificationService.send(
+                                transfer.getRequestedBy().getId(),
+                                "Transfer #" + id + " Rejected",
+                                "Your request for " + transfer.getQuantity() + "x "
+                                                + transfer.getItem().getName() + " was rejected. Reason: " + reason,
+                                "TRANSFER_REJECTED");
+
+                return mapToResponse(transfer);
+        }
+
         // ─── Helpers ──────────────────────────────────────────────────────────────
 
         private void assertStatus(TransferRequest transfer, TransferStatus... allowed) {
@@ -231,8 +304,17 @@ public class TransferService {
                 throw new RuntimeException("Invalid status transition from: " + transfer.getStatus());
         }
 
+        // Basic fetch — used where no notification is sent (getTransferById,
+        // cancelTransfer)
         private TransferRequest getTransfer(Long id) {
                 return transferRequestRepository.findById(id)
+                                .orElseThrow(() -> new RuntimeException("Transfer not found: " + id));
+        }
+
+        // Eager fetch — used wherever we need requestedBy/item/branches for
+        // notifications
+        private TransferRequest getTransferWithDetails(Long id) {
+                return transferRequestRepository.findByIdWithDetails(id)
                                 .orElseThrow(() -> new RuntimeException("Transfer not found: " + id));
         }
 

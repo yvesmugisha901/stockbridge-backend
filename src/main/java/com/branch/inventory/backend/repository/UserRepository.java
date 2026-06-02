@@ -39,6 +39,8 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     List<User> findByRoleAndBranchId(Role role, Long branchId);
 
+    List<User> findByBranchIdAndRole(Long branchId, Role role);
+
     // Used by AdminService.getStats() — counts users created this calendar month
     long countByCreatedAtAfter(LocalDateTime date);
 }
