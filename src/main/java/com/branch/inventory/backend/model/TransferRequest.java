@@ -59,6 +59,7 @@ public class TransferRequest {
     @Column(nullable = false, updatable = false)
     private LocalDateTime requestedAt;
 
+    // ── Level 1: Branch A manager ─────────────────────────────────────────────
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "manager_approved_by_id")
     private User managerApprovedBy;
@@ -68,6 +69,7 @@ public class TransferRequest {
     @Column(length = 500)
     private String managerComments;
 
+    // ── Level 2: HO Admin ─────────────────────────────────────────────────────
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "ho_approved_by_id")
     private User hoApprovedBy;
@@ -77,7 +79,14 @@ public class TransferRequest {
     @Column(length = 500)
     private String hoComments;
 
+    // ── Level 3: Branch B manager dispatches ──────────────────────────────────
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "dispatched_by_id")
+    private User dispatchedBy;
+
     private LocalDateTime dispatchedAt;
+
+    // ── Level 4: Branch A confirms receipt ────────────────────────────────────
     private LocalDateTime receivedAt;
 
     // ── Audit timestamps ──────────────────────────────────────────────────────

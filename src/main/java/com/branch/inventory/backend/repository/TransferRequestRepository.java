@@ -26,6 +26,13 @@ public interface TransferRequestRepository extends JpaRepository<TransferRequest
     Page<TransferRequest> findByStatusAndSourceBranch(TransferStatus status, Branch sourceBranch,
             Pageable pageable);
 
+    // ── NEW: used by ApprovalService.getPendingForManager ────────────────────
+    // Filters by destinationBranch so the requesting branch's manager sees the
+    // queue,
+    // not the source branch's manager.
+    Page<TransferRequest> findByStatusAndDestinationBranch(TransferStatus status,
+            Branch destinationBranch, Pageable pageable);
+
     List<TransferRequest> findBySourceBranchId(Long branchId);
 
     List<TransferRequest> findByDestinationBranchId(Long branchId);
@@ -113,11 +120,11 @@ public interface TransferRequestRepository extends JpaRepository<TransferRequest
             """, countQuery = "SELECT COUNT(*) FROM transfer_requests", nativeQuery = true)
     List<Map<String, Object>> findRecentActivity(Pageable pageable);
 
-    // ── NEW: approved transfers waiting to be shipped FROM this branch ────────
+    // ── approved transfers waiting to be shipped FROM this branch ─────────────
     Page<TransferRequest> findBySourceBranchAndStatusIn(
             Branch sourceBranch, List<TransferStatus> statuses, Pageable pageable);
 
-    // ── NEW: in-transit transfers heading TO this branch ──────────────────────
+    // ── in-transit transfers heading TO this branch ───────────────────────────
     Page<TransferRequest> findByDestinationBranchAndStatusIn(
             Branch destinationBranch, List<TransferStatus> statuses, Pageable pageable);
 }

@@ -22,9 +22,10 @@ public class ApprovalService {
     private final TransferRequestRepository transferRequestRepository;
     private final UserRepository userRepository;
     private final AuditLogService auditLogService;
-    private final NotificationService notificationService; // ← added
+    private final NotificationService notificationService;
 
-    // ─── Manager queue ────────────────────────────────────────────────────────
+    // ─── Manager queue (Branch A — destination / requesting branch) ───────────
+    // Shows PENDING transfers where manager's branch = destinationBranch
 
     @Transactional(readOnly = true)
     public Page<TransferResponse> getPendingForManager(String email, Pageable pageable) {
@@ -33,11 +34,12 @@ public class ApprovalService {
             throw new RuntimeException("Manager is not assigned to a branch");
         }
         return transferRequestRepository
-                .findByStatusAndSourceBranch(TransferStatus.PENDING, manager.getBranch(), pageable)
+                .findByStatusAndDestinationBranch(TransferStatus.PENDING, manager.getBranch(), pageable)
                 .map(this::mapToResponse);
     }
 
     // ─── HO queue ─────────────────────────────────────────────────────────────
+    // Shows MANAGER_APPROVED transfers
 
     @Transactional(readOnly = true)
     public Page<TransferResponse> getPendingForHeadOffice(Pageable pageable) {
@@ -46,14 +48,27 @@ public class ApprovalService {
                 .map(this::mapToResponse);
     }
 
-    // ─── Manager approve / reject ─────────────────────────────────────────────
+    // ─── Source branch dispatch queue (Branch B — supplying branch) ───────────
+    // Shows HO_APPROVED transfers where manager's branch = sourceBranch
+
+    @Transactional(readOnly = true)
+    public Page<TransferResponse> getPendingDispatch(String email, Pageable pageable) {
+        User manager = getUser(email);
+        if (manager.getBranch() == null) {
+            throw new RuntimeException("Manager is not assigned to a branch");
+        }
+        return transferRequestRepository
+                .findByStatusAndSourceBranch(TransferStatus.HO_APPROVED, manager.getBranch(), pageable)
+                .map(this::mapToResponse);
+    }
+
+    // ─── Manager approve / reject (Branch A — level 1) ────────────────────────
 
     @Transactional
     public TransferResponse managerDecision(Long transferId,
             ApprovalDecisionRequest request,
             String email) {
 
-        // Eager fetch so requestedBy / item / branches are available for notification
         TransferRequest transfer = getTransferWithDetails(transferId);
         assertStatus(transfer, TransferStatus.PENDING);
 
@@ -63,41 +78,41 @@ public class ApprovalService {
 
         User manager = getUser(email);
 
-        if (request.isApproved()) {
-            TransferStatus nextStatus = transfer.isRequiresHoApproval()
-                    ? TransferStatus.MANAGER_APPROVED
-                    : TransferStatus.HO_APPROVED;
+        if (manager.getBranch() == null ||
+                !manager.getBranch().getId().equals(transfer.getDestinationBranch().getId())) {
+            throw new RuntimeException(
+                    "You are not the manager of the branch that requested this transfer");
+        }
 
-            transfer.setStatus(nextStatus);
+        if (request.isApproved()) {
+            // Always go to MANAGER_APPROVED so HO Admin queue always sees it
+            transfer.setStatus(TransferStatus.MANAGER_APPROVED);
             transfer.setManagerApprovedBy(manager);
             transfer.setManagerApprovedAt(LocalDateTime.now());
             transfer.setManagerComments(request.getComments());
             transferRequestRepository.save(transfer);
 
             auditLogService.log("MANAGER_APPROVED", "TransferRequest", transferId, email,
-                    "Manager approved. Next status: " + nextStatus);
+                    "Manager approved. Forwarded to HO Admin.");
 
-            if (nextStatus == TransferStatus.MANAGER_APPROVED) {
-                // Still needs HO approval — notify HO admins
-                userRepository.findByRole(com.branch.inventory.backend.model.enums.Role.HO_ADMIN)
-                        .forEach(admin -> notificationService.send(
-                                admin.getId(),
-                                "Transfer #" + transferId + " Awaiting HO Approval",
-                                transfer.getQuantity() + "x " + transfer.getItem().getName()
-                                        + " from " + transfer.getSourceBranch().getName()
-                                        + " has been approved by the branch manager and needs your review.",
-                                "TRANSFER_PENDING"));
-            }
+            // Notify all HO admins
+            userRepository.findByRole(com.branch.inventory.backend.model.enums.Role.HO_ADMIN)
+                    .forEach(admin -> notificationService.send(
+                            admin.getId(),
+                            "Transfer #" + transferId + " Awaiting HO Approval",
+                            transfer.getQuantity() + "x " + transfer.getItem().getName()
+                                    + " from " + transfer.getSourceBranch().getName()
+                                    + " to " + transfer.getDestinationBranch().getName()
+                                    + " approved by branch manager. Needs your review.",
+                            "TRANSFER_PENDING"));
 
-            // Notify the requester their transfer was approved
+            // Notify the requester
             notificationService.send(
                     transfer.getRequestedBy().getId(),
-                    "Transfer #" + transferId + " Approved",
+                    "Transfer #" + transferId + " Approved by Manager",
                     "Your request for " + transfer.getQuantity() + "x "
-                            + transfer.getItem().getName() + " has been approved"
-                            + (nextStatus == TransferStatus.MANAGER_APPROVED
-                                    ? " by your branch manager and is awaiting Head Office review."
-                                    : "."),
+                            + transfer.getItem().getName()
+                            + " has been approved by your branch manager and is awaiting Head Office review.",
                     "TRANSFER_APPROVED");
 
         } else {
@@ -110,13 +125,12 @@ public class ApprovalService {
             auditLogService.log("MANAGER_REJECTED", "TransferRequest", transferId, email,
                     "Manager rejected. Reason: " + request.getComments());
 
-            // Notify the requester their transfer was rejected
             notificationService.send(
                     transfer.getRequestedBy().getId(),
                     "Transfer #" + transferId + " Rejected",
                     "Your request for " + transfer.getQuantity() + "x "
                             + transfer.getItem().getName()
-                            + " was rejected. Reason: " + request.getComments(),
+                            + " was rejected by your branch manager. Reason: " + request.getComments(),
                     "TRANSFER_REJECTED");
         }
 
@@ -130,7 +144,6 @@ public class ApprovalService {
             ApprovalDecisionRequest request,
             String email) {
 
-        // Eager fetch so requestedBy / item / branches are available for notification
         TransferRequest transfer = getTransferWithDetails(transferId);
         assertStatus(transfer, TransferStatus.MANAGER_APPROVED);
 
@@ -141,6 +154,7 @@ public class ApprovalService {
         User hoAdmin = getUser(email);
 
         if (request.isApproved()) {
+            // HO_APPROVED — now goes to source branch manager dispatch queue
             transfer.setStatus(TransferStatus.HO_APPROVED);
             transfer.setHoApprovedBy(hoAdmin);
             transfer.setHoApprovedAt(LocalDateTime.now());
@@ -148,16 +162,30 @@ public class ApprovalService {
             transferRequestRepository.save(transfer);
 
             auditLogService.log("HO_APPROVED", "TransferRequest", transferId, email,
-                    "Head Office final approval granted");
+                    "Head Office approved. Forwarded to source branch manager for dispatch.");
 
-            // Notify the requester of final HO approval
+            // Notify the requester
             notificationService.send(
                     transfer.getRequestedBy().getId(),
                     "Transfer #" + transferId + " Approved by Head Office",
                     "Your request for " + transfer.getQuantity() + "x "
                             + transfer.getItem().getName()
-                            + " has received final approval from Head Office.",
+                            + " has received final approval from Head Office. "
+                            + transfer.getSourceBranch().getName() + " will now dispatch the stock.",
                     "TRANSFER_APPROVED");
+
+            // Notify source branch manager (Branch B) to dispatch
+            userRepository.findByBranchIdAndRole(
+                    transfer.getSourceBranch().getId(),
+                    com.branch.inventory.backend.model.enums.Role.MANAGER)
+                    .forEach(sourceMgr -> notificationService.send(
+                            sourceMgr.getId(),
+                            "Dispatch Required — Transfer #" + transferId,
+                            transfer.getQuantity() + "x " + transfer.getItem().getName()
+                                    + " needs to be dispatched to "
+                                    + transfer.getDestinationBranch().getName()
+                                    + ". Please confirm and mark as In Transit.",
+                            "TRANSFER_DISPATCH"));
 
         } else {
             transfer.setStatus(TransferStatus.REJECTED);
@@ -169,7 +197,6 @@ public class ApprovalService {
             auditLogService.log("HO_REJECTED", "TransferRequest", transferId, email,
                     "Head Office rejected. Reason: " + request.getComments());
 
-            // Notify the requester of HO rejection
             notificationService.send(
                     transfer.getRequestedBy().getId(),
                     "Transfer #" + transferId + " Rejected by Head Office",
@@ -178,6 +205,55 @@ public class ApprovalService {
                             + " was rejected by Head Office. Reason: " + request.getComments(),
                     "TRANSFER_REJECTED");
         }
+
+        return mapToResponse(transfer);
+    }
+
+    // ─── Source branch dispatch (Branch B — mark IN_TRANSIT) ─────────────────
+
+    @Transactional
+    public TransferResponse dispatchTransfer(Long transferId, String email) {
+
+        TransferRequest transfer = getTransferWithDetails(transferId);
+        assertStatus(transfer, TransferStatus.HO_APPROVED);
+
+        User manager = getUser(email);
+
+        // Guard: only the source branch manager can dispatch
+        if (manager.getBranch() == null ||
+                !manager.getBranch().getId().equals(transfer.getSourceBranch().getId())) {
+            throw new RuntimeException(
+                    "You are not the manager of the branch supplying this transfer");
+        }
+
+        transfer.setStatus(TransferStatus.IN_TRANSIT);
+        transfer.setDispatchedBy(manager);
+        transfer.setDispatchedAt(LocalDateTime.now());
+        transferRequestRepository.save(transfer);
+
+        auditLogService.log("DISPATCHED", "TransferRequest", transferId, email,
+                "Stock dispatched by source branch manager. Now IN_TRANSIT.");
+
+        // Notify the requester that stock is on the way
+        notificationService.send(
+                transfer.getRequestedBy().getId(),
+                "Transfer #" + transferId + " Dispatched — Stock In Transit",
+                transfer.getQuantity() + "x " + transfer.getItem().getName()
+                        + " has been dispatched from " + transfer.getSourceBranch().getName()
+                        + " and is on the way to your branch.",
+                "TRANSFER_IN_TRANSIT");
+
+        // Notify destination branch manager (Branch A) to expect delivery
+        userRepository.findByBranchIdAndRole(
+                transfer.getDestinationBranch().getId(),
+                com.branch.inventory.backend.model.enums.Role.MANAGER)
+                .forEach(destMgr -> notificationService.send(
+                        destMgr.getId(),
+                        "Stock In Transit — Transfer #" + transferId,
+                        transfer.getQuantity() + "x " + transfer.getItem().getName()
+                                + " is on its way from " + transfer.getSourceBranch().getName()
+                                + ". Please confirm receipt when it arrives.",
+                        "TRANSFER_IN_TRANSIT"));
 
         return mapToResponse(transfer);
     }
@@ -195,16 +271,11 @@ public class ApprovalService {
         return s == null || s.trim().isEmpty();
     }
 
-    /** Plain fetch — safe for read-only operations with no notification. */
     private TransferRequest getTransfer(Long id) {
         return transferRequestRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Transfer not found: " + id));
     }
 
-    /**
-     * Eager fetch — required wherever requestedBy/item/branches are needed for
-     * notifications.
-     */
     private TransferRequest getTransferWithDetails(Long id) {
         return transferRequestRepository.findByIdWithDetails(id)
                 .orElseThrow(() -> new RuntimeException("Transfer not found: " + id));
