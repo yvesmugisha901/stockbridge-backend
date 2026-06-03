@@ -144,4 +144,33 @@ public class TransferController {
         TransferResponse transfer = transferService.cancelTransfer(id, currentUser.getUsername());
         return ResponseEntity.ok(ApiResponse.success(transfer));
     }
+
+    // ─── ADD THESE TWO ENDPOINTS to TransferController.java ──────────────────────
+    // Place them alongside the existing @GetMapping methods
+
+    /**
+     * GET /api/v1/transfers/ready-to-dispatch
+     * Returns approved transfers waiting to be shipped FROM the user's branch.
+     * Used by source branch staff to click "Mark In Transit".
+     */
+    @GetMapping("/ready-to-dispatch")
+    public ResponseEntity<ApiResponse<Page<TransferResponse>>> getReadyToDispatch(
+            @AuthenticationPrincipal UserDetails userDetails,
+            Pageable pageable) {
+        return ResponseEntity.ok(ApiResponse.success(
+                transferService.getReadyToDispatch(userDetails.getUsername(), pageable)));
+    }
+
+    /**
+     * GET /api/v1/transfers/incoming
+     * Returns IN_TRANSIT transfers heading TO the user's branch.
+     * Used by destination branch staff to click "Confirm Receipt".
+     */
+    @GetMapping("/incoming")
+    public ResponseEntity<ApiResponse<Page<TransferResponse>>> getIncomingTransfers(
+            @AuthenticationPrincipal UserDetails userDetails,
+            Pageable pageable) {
+        return ResponseEntity.ok(ApiResponse.success(
+                transferService.getIncomingTransfers(userDetails.getUsername(), pageable)));
+    }
 }

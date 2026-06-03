@@ -21,10 +21,8 @@ public interface TransferRequestRepository extends JpaRepository<TransferRequest
 
     List<TransferRequest> findByStatus(TransferStatus status);
 
-    // Used by ApprovalService.getPendingForHeadOffice()
     Page<TransferRequest> findByStatus(TransferStatus status, Pageable pageable);
 
-    // Used by ApprovalService.getPendingForManager()
     Page<TransferRequest> findByStatusAndSourceBranch(TransferStatus status, Branch sourceBranch,
             Pageable pageable);
 
@@ -34,7 +32,6 @@ public interface TransferRequestRepository extends JpaRepository<TransferRequest
 
     List<TransferRequest> findByRequestedById(Long userId);
 
-    // Used by TransferService.getMyTransfers()
     Page<TransferRequest> findByRequestedBy(User requestedBy, Pageable pageable);
 
     List<TransferRequest> findBySourceBranchIdAndStatus(Long branchId, TransferStatus status);
@@ -45,8 +42,6 @@ public interface TransferRequestRepository extends JpaRepository<TransferRequest
             "t.sourceBranch.id = :branchId OR t.destinationBranch.id = :branchId")
     List<TransferRequest> findByBranch(@Param("branchId") Long branchId);
 
-    // Eagerly fetches requestedBy, item, sourceBranch, destinationBranch
-    // Used by TransferService methods that send notifications
     @Query("SELECT t FROM TransferRequest t " +
             "JOIN FETCH t.requestedBy " +
             "JOIN FETCH t.item " +
@@ -55,11 +50,9 @@ public interface TransferRequestRepository extends JpaRepository<TransferRequest
             "WHERE t.id = :id")
     Optional<TransferRequest> findByIdWithDetails(@Param("id") Long id);
 
-    // Used by TransferService.getTransfers()
     @Query("SELECT t FROM TransferRequest t WHERE " +
             "(:user IS NULL OR t.requestedBy = :user) " +
-            "AND (:branchId IS NULL OR t.sourceBranch.id = :branchId OR t.destinationBranch.id = :branchId) "
-            +
+            "AND (:branchId IS NULL OR t.sourceBranch.id = :branchId OR t.destinationBranch.id = :branchId) " +
             "AND (:status IS NULL OR t.status = :status) " +
             "AND (:itemId IS NULL OR t.item.id = :itemId) " +
             "AND (:from IS NULL OR CAST(t.requestedAt AS date) >= :from) " +
@@ -73,7 +66,6 @@ public interface TransferRequestRepository extends JpaRepository<TransferRequest
             @Param("to") LocalDate to,
             Pageable pageable);
 
-    // Used by ReportService.getTransferHistoryReport()
     @Query("SELECT t FROM TransferRequest t WHERE " +
             "(:branchId IS NULL OR t.sourceBranch.id = :branchId OR t.destinationBranch.id = :branchId) " +
             "AND (:status IS NULL OR t.status = :status) " +
@@ -102,7 +94,6 @@ public interface TransferRequestRepository extends JpaRepository<TransferRequest
             @Param("to") LocalDate to,
             Pageable pageable);
 
-    // Used by AdminService.getRecentActivity()
     @Query(value = """
             SELECT
                 t.id                     AS id,
@@ -121,4 +112,12 @@ public interface TransferRequestRepository extends JpaRepository<TransferRequest
             ORDER BY t.requested_at DESC
             """, countQuery = "SELECT COUNT(*) FROM transfer_requests", nativeQuery = true)
     List<Map<String, Object>> findRecentActivity(Pageable pageable);
+
+    // ── NEW: approved transfers waiting to be shipped FROM this branch ────────
+    Page<TransferRequest> findBySourceBranchAndStatusIn(
+            Branch sourceBranch, List<TransferStatus> statuses, Pageable pageable);
+
+    // ── NEW: in-transit transfers heading TO this branch ──────────────────────
+    Page<TransferRequest> findByDestinationBranchAndStatusIn(
+            Branch destinationBranch, List<TransferStatus> statuses, Pageable pageable);
 }
