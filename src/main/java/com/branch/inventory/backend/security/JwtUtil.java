@@ -19,24 +19,25 @@ public class JwtUtil {
     @Value("${jwt.secret}")
     private String secret;
 
-    @Value("${jwt.expiration:86400000}")
+    /**
+     * Access token lifetime — default 15 minutes.
+     * Override in application.properties: jwt.expiration=900000
+     */
+    @Value("${jwt.expiration:900000}")
     private long expiration;
 
     private SecretKey getSigningKey() {
         return Keys.hmacShaKeyFor(secret.getBytes());
     }
 
-    // Original — still used by Spring Security internals
+    // ── Token generation ──────────────────────────────────────────────────────
+
+    /** Used by Spring Security internals (no extra claims). */
     public String generateToken(UserDetails userDetails) {
-        Map<String, Object> claims = new HashMap<>();
-        claims.put("role", userDetails.getAuthorities().stream()
-                .findFirst()
-                .map(Object::toString)
-                .orElse(""));
-        return createToken(claims, userDetails.getUsername());
+        return createToken(new HashMap<>(), userDetails.getUsername());
     }
 
-    // Called from AuthService — embeds fullName + branchId into the JWT
+    /** Used by AuthService at login — embeds role, fullName, branchId. */
     public String generateToken(UserDetails userDetails, User user) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("role", userDetails.getAuthorities().stream()
@@ -58,6 +59,8 @@ public class JwtUtil {
                 .signWith(getSigningKey())
                 .compact();
     }
+
+    // ── Claim extraction ──────────────────────────────────────────────────────
 
     public String extractUsername(String token) {
         return extractClaim(token, Claims::getSubject);
@@ -84,8 +87,7 @@ public class JwtUtil {
     }
 
     public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
-        final Claims claims = extractAllClaims(token);
-        return claimsResolver.apply(claims);
+        return claimsResolver.apply(extractAllClaims(token));
     }
 
     private Claims extractAllClaims(String token) {
@@ -96,12 +98,14 @@ public class JwtUtil {
                 .getBody();
     }
 
+    // ── Validation ────────────────────────────────────────────────────────────
+
     public boolean isTokenExpired(String token) {
         return extractExpiration(token).before(new Date());
     }
 
     public boolean validateToken(String token, UserDetails userDetails) {
         final String username = extractUsername(token);
-        return (username.equals(userDetails.getUsername()) && !isTokenExpired(token));
+        return username.equals(userDetails.getUsername()) && !isTokenExpired(token);
     }
 }
