@@ -116,16 +116,6 @@ public class TransferService {
 
         // ─── Read ─────────────────────────────────────────────────────────────────
 
-        /**
-         * Role-aware transfer list used by the reports page and transfer list views.
-         *
-         * STAFF → only their own transfers (requestedBy = user)
-         * MANAGER → all transfers involving their branch (source OR destination)
-         * HO_ADMIN / ADMIN / ACCOUNTANT → all transfers across every branch
-         *
-         * The caller may still narrow results further with status, itemId, date
-         * filters.
-         */
         @Transactional(readOnly = true)
         public Page<TransferResponse> getTransfers(String email, Long branchId, String status,
                         Long itemId, String fromDate, String toDate, Pageable pageable) {
@@ -135,27 +125,19 @@ public class TransferService {
                 LocalDate to = toDate != null ? LocalDate.parse(toDate) : null;
                 TransferStatus transferStatus = status != null ? TransferStatus.valueOf(status) : null;
 
-                // Resolve the effective user/branch filters based on role
                 User filterUser = null;
-                Long filterBranchId = branchId; // caller may override via query param
+                Long filterBranchId = branchId;
 
                 if (user.getRole() == Role.STAFF) {
-                        // Staff see only their own requests
                         filterUser = user;
                         filterBranchId = null;
-
                 } else if (user.getRole() == Role.MANAGER) {
-                        // Manager sees everything touching their branch
-                        // unless the caller already passed a specific branchId
                         filterUser = null;
                         if (filterBranchId == null && user.getBranch() != null) {
                                 filterBranchId = user.getBranch().getId();
                         }
-
                 } else {
-                        // HO_ADMIN, ADMIN, ACCOUNTANT — see everything
                         filterUser = null;
-                        // keep filterBranchId as supplied (null = all branches)
                 }
 
                 return transferRequestRepository
@@ -326,7 +308,7 @@ public class TransferService {
                 return mapToResponse(transfer);
         }
 
-        // ─── New: Ready to dispatch / Incoming ────────────────────────────────────
+        // ─── Ready to dispatch / Incoming ─────────────────────────────────────────
 
         @Transactional(readOnly = true)
         public Page<TransferResponse> getReadyToDispatch(String email, Pageable pageable) {
@@ -390,7 +372,11 @@ public class TransferService {
                                 .orElseThrow(() -> new RuntimeException("Item not found: " + id));
         }
 
-        private TransferResponse mapToResponse(TransferRequest t) {
+        // ─── Package-private so ReportService can reuse it ────────────────────────
+        // Changed from private → package-private (no modifier) so ReportService
+        // in the same package can call transferService.mapToResponse(t) directly,
+        // avoiding code duplication of the DTO mapping logic.
+        TransferResponse mapToResponse(TransferRequest t) {
                 return TransferResponse.builder()
                                 .id(t.getId())
                                 .sourceBranchId(t.getSourceBranch().getId())
