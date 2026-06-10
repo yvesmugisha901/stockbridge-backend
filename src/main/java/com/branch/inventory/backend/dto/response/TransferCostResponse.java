@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 @Data
 @Builder
@@ -14,7 +15,9 @@ import java.math.BigDecimal;
 public class TransferCostResponse {
 
     private Long transferId;
+    private Long sourceBranchId; // ← added: needed for branch filter
     private String sourceBranchName;
+    private Long destinationBranchId; // ← added: needed for branch filter
     private String destinationBranchName;
     private String itemName;
     private int quantity;
@@ -24,4 +27,5 @@ public class TransferCostResponse {
     private String currency;
     private String costType;
     private String costNotes;
+    private LocalDateTime requestedAt;
 }

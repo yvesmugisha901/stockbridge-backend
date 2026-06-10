@@ -102,13 +102,17 @@ public class TransferService {
                                 + " → " + destBranch.getName() + ".";
 
                 if (requiresHoApproval) {
+                        // Large/high-value transfer: notify all HO admins
                         userRepository.findByRole(Role.HO_ADMIN)
-                                        .forEach(admin -> notificationService.send(admin.getId(),
-                                                        notifTitle, notifMessage, "TRANSFER_PENDING"));
+                                        .forEach(admin -> notificationService.send(
+                                                        admin.getId(), notifTitle, notifMessage, "TRANSFER_PENDING"));
                 } else {
-                        userRepository.findByBranchIdAndRole(sourceBranch.getId(), Role.MANAGER)
-                                        .forEach(manager -> notificationService.send(manager.getId(),
-                                                        notifTitle, notifMessage, "TRANSFER_PENDING"));
+                        // FIX: notify managers of the DESTINATION branch (the branch requesting stock),
+                        // not the source branch. The destination branch manager owns this approval —
+                        // they are requesting stock for their branch and need to confirm/approve it.
+                        userRepository.findByBranchIdAndRole(destBranch.getId(), Role.MANAGER)
+                                        .forEach(manager -> notificationService.send(
+                                                        manager.getId(), notifTitle, notifMessage, "TRANSFER_PENDING"));
                 }
 
                 return mapToResponse(saved);
@@ -373,9 +377,6 @@ public class TransferService {
         }
 
         // ─── Package-private so ReportService can reuse it ────────────────────────
-        // Changed from private → package-private (no modifier) so ReportService
-        // in the same package can call transferService.mapToResponse(t) directly,
-        // avoiding code duplication of the DTO mapping logic.
         TransferResponse mapToResponse(TransferRequest t) {
                 return TransferResponse.builder()
                                 .id(t.getId())
@@ -391,7 +392,10 @@ public class TransferService {
                                 .justification(t.getJustification())
                                 .status(t.getStatus().name())
                                 .requiresHoApproval(t.isRequiresHoApproval())
+                                // Provides both email and full name so the frontend can display either
                                 .requestedByEmail(t.getRequestedBy().getEmail())
+                                .requestedByName(t.getRequestedBy().getFullName()) // FIX: was missing — caused null in
+                                                                                   // dashboard
                                 .requestedAt(t.getRequestedAt())
                                 .dispatchedAt(t.getDispatchedAt())
                                 .receivedAt(t.getReceivedAt())
