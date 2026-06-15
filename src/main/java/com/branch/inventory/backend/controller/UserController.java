@@ -5,6 +5,7 @@ import com.branch.inventory.backend.dto.request.UpdateProfileRequest;
 import com.branch.inventory.backend.dto.request.UpdateUserRequest;
 import com.branch.inventory.backend.dto.response.ApiResponse;
 import com.branch.inventory.backend.dto.response.UserResponse;
+import com.branch.inventory.backend.service.EmailService;
 import com.branch.inventory.backend.service.UserService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -30,17 +31,31 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 public class UserController {
 
     private final UserService userService;
+    private final EmailService emailService;
 
     /**
      * POST /api/v1/users
      * Admin creates a new user account with role and branch assignment.
+     * After creation, a welcome email with login credentials is sent
+     * asynchronously.
      * FR-01
      */
     @PostMapping
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<UserResponse>> createUser(
             @Valid @RequestBody CreateUserRequest request) {
+
         UserResponse user = userService.createUser(request);
+
+        // Fire welcome email in background — never blocks the response
+        emailService.sendWelcomeEmail(
+                user.getFullName(),
+                user.getEmail(),
+                request.getPassword(),
+                user.getRole(), // already a String, no .name()
+                user.getBranchName() // this one is fine — exists in UserResponse
+        );
+
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success(user));
     }
