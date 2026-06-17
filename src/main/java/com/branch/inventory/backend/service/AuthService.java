@@ -2,9 +2,13 @@ package com.branch.inventory.backend.service;
 
 import com.branch.inventory.backend.dto.request.ChangePasswordRequest;
 import com.branch.inventory.backend.dto.request.LoginRequest;
+import com.branch.inventory.backend.dto.request.RegisterRequest;
 import com.branch.inventory.backend.dto.response.AuthResponse;
+import com.branch.inventory.backend.model.Branch;
 import com.branch.inventory.backend.model.RefreshToken;
 import com.branch.inventory.backend.model.User;
+import com.branch.inventory.backend.model.enums.Role;
+import com.branch.inventory.backend.repository.BranchRepository;
 import com.branch.inventory.backend.repository.RefreshTokenRepository;
 import com.branch.inventory.backend.repository.UserRepository;
 import com.branch.inventory.backend.security.JwtUtil;
@@ -28,14 +32,11 @@ public class AuthService {
     private final AuthenticationManager authenticationManager;
     private final JwtUtil jwtUtil;
     private final UserRepository userRepository;
+    private final BranchRepository branchRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final PasswordEncoder passwordEncoder;
     private final UserDetailsService userDetailsService;
 
-    /**
-     * 7 days in milliseconds — override with jwt.refresh-expiration in
-     * application.properties
-     */
     @Value("${jwt.refresh-expiration:604800000}")
     private long refreshExpiration;
 
@@ -64,14 +65,51 @@ public class AuthService {
                 .build();
     }
 
-    // ── Refresh token creation (called by AuthController after login) ─────────
+    // ── Self-registration ─────────────────────────────────────────────────────
+
+    @Transactional
+    public void register(RegisterRequest request) {
+        if (userRepository.existsByEmail(request.getEmail())) {
+            throw new RuntimeException("Email already in use: " + request.getEmail());
+        }
+
+        // Convert String role to enum safely
+        Role role;
+        try {
+            role = Role.valueOf(request.getRole().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new RuntimeException("Invalid role: " + request.getRole());
+        }
+
+        // Prevent self-registration as ADMIN
+        if (role == Role.ADMIN) {
+            throw new RuntimeException("Cannot self-register as ADMIN");
+        }
+
+        Branch branch = branchRepository.findById(request.getBranchId())
+                .orElseThrow(() -> new RuntimeException(
+                        "Branch not found: " + request.getBranchId()));
+
+        User user = User.builder()
+                .fullName(request.getFullName())
+                .email(request.getEmail())
+                .passwordHash(passwordEncoder.encode(request.getPassword()))
+                .role(role) // ← enum, not raw String
+                .branch(branch)
+                .active(false) // cannot log in until approved
+                .pendingApproval(true) // visible in admin's pending list
+                .build();
+
+        userRepository.save(user);
+    }
+
+    // ── Refresh token creation ────────────────────────────────────────────────
 
     @Transactional
     public RefreshToken createRefreshToken(String email) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        // Revoke all existing refresh tokens for this user (single-session policy)
         refreshTokenRepository.revokeAllByUserId(user.getId());
 
         RefreshToken rt = RefreshToken.builder()
@@ -86,30 +124,20 @@ public class AuthService {
 
     // ── Silent refresh ────────────────────────────────────────────────────────
 
-    /**
-     * Validates the incoming refresh token cookie, issues a new access token,
-     * and rotates the refresh token (one-time use).
-     *
-     * @return new AuthResponse containing the fresh access token
-     */
     @Transactional
     public AuthResponse refreshAccessToken(String refreshTokenValue) {
         RefreshToken stored = refreshTokenRepository.findByToken(refreshTokenValue)
                 .orElseThrow(() -> new RuntimeException("Refresh token not found"));
 
         if (!stored.isValid()) {
-            // If expired or revoked, kill all tokens for this user to force re-login
             refreshTokenRepository.revokeAllByUserId(stored.getUser().getId());
             throw new RuntimeException("Refresh token expired or revoked. Please log in again.");
         }
 
         User user = stored.getUser();
         UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
-
-        // Issue new access token
         String newAccessToken = jwtUtil.generateToken(userDetails, user);
 
-        // Rotate: revoke old refresh token and issue a new one
         stored.setRevoked(true);
         refreshTokenRepository.save(stored);
 
@@ -123,7 +151,6 @@ public class AuthService {
                 .build();
     }
 
-    /** Called after rotation — saves and returns the new RefreshToken entity. */
     @Transactional
     public RefreshToken rotateRefreshToken(String email) {
         return createRefreshToken(email);
@@ -155,7 +182,6 @@ public class AuthService {
         user.setPasswordHash(passwordEncoder.encode(request.getNewPassword()));
         userRepository.save(user);
 
-        // Invalidate all refresh tokens on password change
         refreshTokenRepository.revokeAllByUserId(user.getId());
     }
 }

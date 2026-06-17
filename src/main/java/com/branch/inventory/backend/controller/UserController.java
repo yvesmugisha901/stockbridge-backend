@@ -18,12 +18,18 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 
+import java.util.List;
+
 /**
  * UserController – manages user accounts.
  * FR-01: User Registration (Admin only)
  * FR-04: Password Management
  * FR-05: User Deactivation
  * NFR-07: Layered architecture enforced
+ *
+ * IMPORTANT – route ordering:
+ * Literal paths (/me, /pending) MUST be declared before /{id} so Spring
+ * does not attempt to parse "me" or "pending" as a Long.
  */
 @RestController
 @RequestMapping("/api/v1/users")
@@ -33,11 +39,52 @@ public class UserController {
     private final UserService userService;
     private final EmailService emailService;
 
+    // ── Literal sub-paths first (before any /{id} mapping) ───────────────────
+
+    /**
+     * GET /api/v1/users/me
+     * Returns the profile of the currently authenticated user.
+     */
+    @GetMapping("/me")
+    public ResponseEntity<ApiResponse<UserResponse>> getMe(
+            @AuthenticationPrincipal UserDetails userDetails) {
+        UserResponse user = userService.getByEmail(userDetails.getUsername());
+        return ResponseEntity.ok(ApiResponse.success(user));
+    }
+
+    /**
+     * PUT /api/v1/users/me
+     * Updates the profile of the currently authenticated user.
+     */
+    @PutMapping("/me")
+    public ResponseEntity<ApiResponse<UserResponse>> updateMe(
+            @AuthenticationPrincipal UserDetails userDetails,
+            @Valid @RequestBody UpdateProfileRequest request) {
+        UserResponse updated = userService.updateProfile(userDetails.getUsername(), request);
+        return ResponseEntity.ok(ApiResponse.success(updated));
+    }
+
+    /**
+     * GET /api/v1/users/pending
+     * Returns all self-registered users who have not yet been activated.
+     * Admin only.
+     *
+     * Must live ABOVE /{id} — otherwise Spring tries to cast "pending" → Long
+     * and throws MethodArgumentTypeMismatchException (HTTP 500).
+     */
+    @GetMapping("/pending")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<List<UserResponse>>> getPendingUsers() {
+        List<UserResponse> pending = userService.getPendingUsers();
+        return ResponseEntity.ok(ApiResponse.success(pending));
+    }
+
+    // ── Collection endpoints ──────────────────────────────────────────────────
+
     /**
      * POST /api/v1/users
      * Admin creates a new user account with role and branch assignment.
-     * After creation, a welcome email with login credentials is sent
-     * asynchronously.
+     * A welcome email with login credentials is sent asynchronously.
      * FR-01
      */
     @PostMapping
@@ -47,14 +94,12 @@ public class UserController {
 
         UserResponse user = userService.createUser(request);
 
-        // Fire welcome email in background — never blocks the response
         emailService.sendWelcomeEmail(
                 user.getFullName(),
                 user.getEmail(),
                 request.getPassword(),
-                user.getRole(), // already a String, no .name()
-                user.getBranchName() // this one is fine — exists in UserResponse
-        );
+                user.getRole(),
+                user.getBranchName());
 
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success(user));
@@ -70,6 +115,8 @@ public class UserController {
         Page<UserResponse> users = userService.getAllUsers(pageable);
         return ResponseEntity.ok(ApiResponse.success(users));
     }
+
+    // ── Single-resource endpoints (/{id} last) ────────────────────────────────
 
     /**
      * GET /api/v1/users/{id}
@@ -107,9 +154,24 @@ public class UserController {
     }
 
     /**
+     * DELETE /api/v1/users/{id}/reject
+     * Rejects and permanently removes a pending self-registration request.
+     * Optionally accepts a reason in the request body (for future email
+     * notification).
+     * Admin only.
+     */
+    @DeleteMapping("/{id}/reject")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<String>> rejectUser(
+            @PathVariable Long id,
+            @RequestBody(required = false) RejectRequest body) {
+        userService.rejectPendingUser(id, body != null ? body.getReason() : null);
+        return ResponseEntity.ok(ApiResponse.success("Registration request rejected."));
+    }
+
+    /**
      * PATCH /api/v1/users/{id}/deactivate
-     * Deactivates a user account without deleting it.
-     * FR-05
+     * Deactivates a user account without deleting it. FR-05
      */
     @PatchMapping("/{id}/deactivate")
     @PreAuthorize("hasRole('ADMIN')")
@@ -120,7 +182,8 @@ public class UserController {
 
     /**
      * PATCH /api/v1/users/{id}/activate
-     * Re-activates a previously deactivated user account.
+     * Activates a user account (works for both re-activation and first-time
+     * approval of a self-registered pending user).
      */
     @PatchMapping("/{id}/activate")
     @PreAuthorize("hasRole('ADMIN')")
@@ -129,20 +192,21 @@ public class UserController {
         return ResponseEntity.ok(ApiResponse.success("User activated successfully."));
     }
 
-    // GET /api/v1/users/me
-    @GetMapping("/me")
-    public ResponseEntity<ApiResponse<UserResponse>> getMe(
-            @AuthenticationPrincipal UserDetails userDetails) {
-        UserResponse user = userService.getByEmail(userDetails.getUsername());
-        return ResponseEntity.ok(ApiResponse.success(user));
-    }
+    // ── Inner DTO for reject body ─────────────────────────────────────────────
 
-    // PUT /api/v1/users/me
-    @PutMapping("/me")
-    public ResponseEntity<ApiResponse<UserResponse>> updateMe(
-            @AuthenticationPrincipal UserDetails userDetails,
-            @Valid @RequestBody UpdateProfileRequest request) {
-        UserResponse updated = userService.updateProfile(userDetails.getUsername(), request);
-        return ResponseEntity.ok(ApiResponse.success(updated));
+    /**
+     * Simple inline DTO for the optional rejection reason.
+     * Move to its own file under dto/request/ if you prefer.
+     */
+    public static class RejectRequest {
+        private String reason;
+
+        public String getReason() {
+            return reason;
+        }
+
+        public void setReason(String reason) {
+            this.reason = reason;
+        }
     }
 }

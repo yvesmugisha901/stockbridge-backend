@@ -15,6 +15,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
+
 @Service
 @RequiredArgsConstructor
 public class UserService {
@@ -43,6 +45,7 @@ public class UserService {
                 .role(request.getRole())
                 .branch(branch)
                 .active(true)
+                .pendingApproval(false)
                 .build();
 
         return mapToResponse(userRepository.save(user));
@@ -78,14 +81,8 @@ public class UserService {
         if (request.getRole() != null)
             user.setRole(request.getRole());
 
-        // ✅ Fixed: use containsKey-style check via a dedicated flag on the DTO,
-        // OR treat branchId explicitly:
-        // - branchId present + non-null → assign that branch
-        // - branchId present + null → unassign branch (set to null)
-        // UpdateUserRequest must have branchId as a nullable field (not primitive)
         if (request.isBranchIdProvided()) {
             if (request.getBranchId() == null) {
-                // Unassign branch
                 user.setBranch(null);
             } else {
                 Branch branch = branchRepository.findById(request.getBranchId())
@@ -98,9 +95,6 @@ public class UserService {
         return mapToResponse(userRepository.save(user));
     }
 
-    /**
-     * Permanently deletes a user by ID.
-     */
     @Transactional
     public void deleteUser(Long id) {
         User user = userRepository.findById(id)
@@ -121,6 +115,7 @@ public class UserService {
         User user = userRepository.findByIdWithBranch(id)
                 .orElseThrow(() -> new RuntimeException("User not found: " + id));
         user.setActive(true);
+        user.setPendingApproval(false);
         userRepository.save(user);
     }
 
@@ -139,6 +134,31 @@ public class UserService {
         return mapToResponse(userRepository.save(user));
     }
 
+    // ── Pending approval ──────────────────────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public List<UserResponse> getPendingUsers() {
+        return userRepository.findByActiveAndPendingApproval(false, true)
+                .stream()
+                .map(this::mapToResponse)
+                .toList();
+    }
+
+    @Transactional
+    public void rejectPendingUser(Long id, String reason) {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("User not found: " + id));
+
+        if (!user.isPendingApproval()) {
+            throw new RuntimeException("User is not pending approval: " + id);
+        }
+
+        userRepository.delete(user);
+        // Optional: emailService.sendRejectionEmail(user.getEmail(), reason);
+    }
+
+    // ── Mapper ────────────────────────────────────────────────────────────────
+
     private UserResponse mapToResponse(User user) {
         return UserResponse.builder()
                 .id(user.getId())
@@ -148,6 +168,8 @@ public class UserService {
                 .branchId(user.getBranch() != null ? user.getBranch().getId() : null)
                 .branchName(user.getBranch() != null ? user.getBranch().getName() : null)
                 .active(user.isActive())
+                .pendingApproval(user.isPendingApproval())
+                .createdAt(user.getCreatedAt())
                 .build();
     }
 }

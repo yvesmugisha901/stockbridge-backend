@@ -44,14 +44,19 @@ public class SecurityConfig {
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // Auth endpoints (login, refresh, logout) — all public
-                        .requestMatchers("/api/v1/auth/**").permitAll()
+                        // Public endpoints
+                        .requestMatchers(
+                                "/api/v1/auth/login",
+                                "/api/v1/auth/register")
+                        .permitAll()
                         .requestMatchers(
                                 "/swagger-ui/**",
                                 "/swagger-ui.html",
                                 "/v3/api-docs/**")
                         .permitAll()
-                        // Role-protected endpoints (unchanged)
+                        // Branches GET is public — needed for the register page dropdown
+                        .requestMatchers(HttpMethod.GET, "/api/v1/branches").permitAll()
+                        // Role-protected endpoints
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.POST, "/api/v1/branches/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/v1/branches/**").hasRole("ADMIN")
@@ -99,7 +104,6 @@ public class SecurityConfig {
                 "https://your-production-domain.com"));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept"));
-        // credentials=true is required for the httpOnly cookie to be sent on /refresh
         config.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

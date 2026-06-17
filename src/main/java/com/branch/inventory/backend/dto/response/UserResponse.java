@@ -20,5 +20,6 @@ public class UserResponse {
     private Long branchId;
     private String branchName;
     private boolean active;
+    private boolean pendingApproval; // ← added
     private LocalDateTime createdAt;
 }

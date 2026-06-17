@@ -2,6 +2,7 @@ package com.branch.inventory.backend.controller;
 
 import com.branch.inventory.backend.dto.request.ChangePasswordRequest;
 import com.branch.inventory.backend.dto.request.LoginRequest;
+import com.branch.inventory.backend.dto.request.RegisterRequest;
 import com.branch.inventory.backend.dto.response.ApiResponse;
 import com.branch.inventory.backend.dto.response.AuthResponse;
 import com.branch.inventory.backend.model.RefreshToken;
@@ -28,7 +29,7 @@ public class AuthController {
     private final AuthService authService;
 
     @Value("${app.cookie.secure:false}")
-    private boolean cookieSecure; // set true in production
+    private boolean cookieSecure;
 
     @Value("${jwt.refresh-expiration:604800000}")
     private long refreshExpirationMs;
@@ -40,14 +41,45 @@ public class AuthController {
             @Valid @RequestBody LoginRequest request,
             HttpServletResponse response) {
 
-        // 1. Authenticate and get access token
         AuthResponse authResponse = authService.login(request);
-
-        // 2. Create a refresh token and set it as httpOnly cookie
         RefreshToken refreshToken = authService.createRefreshToken(request.getEmail());
         setRefreshCookie(response, refreshToken.getToken());
-
         return ResponseEntity.ok(authResponse);
+    }
+
+    // ── Self-registration (public — no auth required) ─────────────────────────
+
+    /**
+     * POST /api/v1/auth/register
+     *
+     * Anyone can submit a registration request. The created user is saved with
+     * active = false and a pendingApproval flag so the admin sees it in the
+     * "Pending Requests" tab. No JWT is issued — the user must wait for admin
+     * activation before they can log in.
+     *
+     * Request body (RegisterRequest):
+     * fullName – required
+     * email – required, unique
+     * password – required, min 8 chars (stored hashed)
+     * role – required (one of the allowed self-select roles)
+     * branchId – required
+     *
+     * Response 201:
+     * { "success": true, "message": "Registration submitted. Awaiting admin
+     * approval." }
+     *
+     * This endpoint must be explicitly permitted in SecurityConfig
+     * (see note below).
+     */
+    @PostMapping("/register")
+    public ResponseEntity<ApiResponse<String>> register(
+            @Valid @RequestBody RegisterRequest request) {
+
+        authService.register(request);
+
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResponse.success(
+                        "Registration submitted. An administrator will review your request."));
     }
 
     // ── Silent refresh ────────────────────────────────────────────────────────
@@ -65,15 +97,10 @@ public class AuthController {
         }
 
         try {
-            // Validate old token, issue new access token
             AuthResponse authResponse = authService.refreshAccessToken(refreshTokenValue);
-
-            // Rotate: issue a new refresh token cookie
             RefreshToken newRefreshToken = authService.rotateRefreshToken(authResponse.getEmail());
             setRefreshCookie(response, newRefreshToken.getToken());
-
             return ResponseEntity.ok(authResponse);
-
         } catch (RuntimeException e) {
             clearRefreshCookie(response);
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
@@ -105,22 +132,13 @@ public class AuthController {
             HttpServletResponse response) {
 
         authService.changePassword(currentUser.getUsername(), request);
-
-        // Clear refresh cookie — forces re-login after password change
         clearRefreshCookie(response);
-
         return ResponseEntity.ok(ApiResponse.success("Password changed successfully."));
     }
 
     // ── Cookie helpers ────────────────────────────────────────────────────────
 
     private void setRefreshCookie(HttpServletResponse response, String token) {
-        Cookie cookie = new Cookie("refresh_token", token);
-        cookie.setHttpOnly(true);
-        cookie.setSecure(cookieSecure);
-        cookie.setPath("/api/v1/auth"); // only sent to auth endpoints
-        cookie.setMaxAge((int) (refreshExpirationMs / 1000));
-        // SameSite=Strict via header (Cookie API doesn't expose it pre-Servlet 6)
         response.addHeader("Set-Cookie",
                 String.format("refresh_token=%s; Path=/api/v1/auth; HttpOnly; %sSameSite=Strict; Max-Age=%d",
                         token,
