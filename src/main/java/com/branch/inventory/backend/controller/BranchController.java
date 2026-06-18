@@ -72,3 +72,4 @@ public class BranchController {
         return ResponseEntity.ok(ApiResponse.success("Branch activated successfully."));
     }
 }
+    
