@@ -138,9 +138,17 @@ public class AuthController {
 
     // ── Cookie helpers ────────────────────────────────────────────────────────
 
+    // NOTE: SameSite changed from "Strict" to "Lax". The frontend (localhost:3000)
+    // and backend (localhost:8080) are different origins, so this cookie is sent
+    // cross-site on every fetch from the Next.js app. "Strict" cookies are not
+    // attached to cross-site requests at all (and some Chromium versions won't
+    // even persist a "Strict" cookie received from a cross-site response), which
+    // is why refresh_token never appeared in the cookie jar. "Lax" allows the
+    // cookie to be stored and sent in this same-app cross-port dev setup while
+    // still blocking it for genuine third-party/tracking contexts.
     private void setRefreshCookie(HttpServletResponse response, String token) {
         response.addHeader("Set-Cookie",
-                String.format("refresh_token=%s; Path=/api/v1/auth; HttpOnly; %sSameSite=Strict; Max-Age=%d",
+                String.format("refresh_token=%s; Path=/api/v1/auth; HttpOnly; %sSameSite=Lax; Max-Age=%d",
                         token,
                         cookieSecure ? "Secure; " : "",
                         refreshExpirationMs / 1000));
@@ -148,7 +156,7 @@ public class AuthController {
 
     private void clearRefreshCookie(HttpServletResponse response) {
         response.addHeader("Set-Cookie",
-                "refresh_token=; Path=/api/v1/auth; HttpOnly; SameSite=Strict; Max-Age=0");
+                "refresh_token=; Path=/api/v1/auth; HttpOnly; SameSite=Lax; Max-Age=0");
     }
 
     private String extractRefreshCookie(HttpServletRequest request) {
