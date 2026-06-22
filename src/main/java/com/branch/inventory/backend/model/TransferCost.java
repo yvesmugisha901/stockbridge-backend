@@ -38,6 +38,10 @@ public class TransferCost {
     @Column(nullable = false)
     private LocalDateTime recordedAt;
 
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "recorded_by_id", nullable = false)
+    private User recordedBy;
+
     @PrePersist
     protected void onCreate() {
         if (recordedAt == null)

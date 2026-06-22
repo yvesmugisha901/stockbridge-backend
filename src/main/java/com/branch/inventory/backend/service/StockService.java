@@ -143,6 +143,7 @@ public class StockService {
                                 .itemId(s.getItem().getId())
                                 .itemName(s.getItem().getName())
                                 .itemCode(s.getItem().getCode())
+                                .category(s.getItem().getCategory()) // ← ADDED: was missing, caused null category
                                 .quantityOnHand(s.getQuantityOnHand())
                                 .reservedQuantity(s.getReservedQuantity())
                                 .minimumThreshold(s.getMinimumThreshold())

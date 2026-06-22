@@ -1,11 +1,14 @@
 package com.branch.inventory.backend.service;
 
+import com.branch.inventory.backend.dto.response.StockLevelResponse;
+import com.branch.inventory.backend.dto.response.TransferResponse;
 import com.branch.inventory.backend.model.StockLevel;
 import com.branch.inventory.backend.model.TransferRequest;
 import com.branch.inventory.backend.model.enums.TransferStatus;
 import com.branch.inventory.backend.repository.StockLevelRepository;
 import com.branch.inventory.backend.repository.TransferRequestRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,13 +24,48 @@ public class ReportService {
     private final StockLevelRepository stockLevelRepository;
     private final TransferRequestRepository transferRequestRepository;
 
+    // Inject lazily to avoid a circular-dependency compile error if TransferService
+    // ever needs ReportService in the future. If there's no circular dep in your
+    // project you can remove @Lazy and keep it as a normal final field via
+    // @RequiredArgsConstructor — but then you must add it to the constructor
+    // manually
+    // since @Lazy doesn't work with Lombok's @RequiredArgsConstructor.
+    private final TransferService transferService;
+
+    // ── Stock mapper ──────────────────────────────────────────────────────────
+
+    private StockLevelResponse toStockResponse(StockLevel s) {
+        return StockLevelResponse.builder()
+                .id(s.getId())
+                .branchId(s.getBranch().getId())
+                .branchName(s.getBranch().getName())
+                .itemId(s.getItem().getId())
+                .itemName(s.getItem().getName())
+                .itemCode(s.getItem().getCode())
+                .category(s.getItem().getCategory())
+                .quantityOnHand(s.getQuantityOnHand())
+                .reservedQuantity(s.getReservedQuantity())
+                .minimumThreshold(s.getMinimumThreshold())
+                .isLowStock(s.getQuantityOnHand() <= s.getMinimumThreshold())
+                .lastUpdated(s.getLastUpdated())
+                .build();
+    }
+
+    // ── Stock Level Report ────────────────────────────────────────────────────
+
     @Transactional(readOnly = true)
-    public Object getStockLevelReport(Long branchId, String category, Long itemId) {
-        return stockLevelRepository.findByFiltersForReport(branchId, itemId, category);
+    public List<StockLevelResponse> getStockLevelReport(
+            Long branchId, String category, Long itemId) {
+        return stockLevelRepository
+                .findByFiltersForReport(branchId, itemId, category)
+                .stream()
+                .map(this::toStockResponse)
+                .toList();
     }
 
     @Transactional(readOnly = true)
-    public byte[] exportStockLevelReportCsv(Long branchId, String category, Long itemId) {
+    public byte[] exportStockLevelReportCsv(
+            Long branchId, String category, Long itemId) {
         List<StockLevel> stocks = stockLevelRepository.findByFiltersForReport(branchId, itemId, category);
 
         StringWriter sw = new StringWriter();
@@ -50,18 +88,30 @@ public class ReportService {
         return sw.toString().getBytes();
     }
 
+    // ── Transfer History Report ───────────────────────────────────────────────
+
     @Transactional(readOnly = true)
-    public Object getTransferHistoryReport(Long branchId, String status,
-            Long itemId, String fromDate, String toDate) {
+    public List<TransferResponse> getTransferHistoryReport(
+            Long branchId, String status, Long itemId,
+            String fromDate, String toDate) {
         LocalDate from = fromDate != null ? LocalDate.parse(fromDate) : null;
         LocalDate to = toDate != null ? LocalDate.parse(toDate) : null;
         TransferStatus ts = status != null ? TransferStatus.valueOf(status) : null;
-        return transferRequestRepository.findForHistoryReport(branchId, ts, itemId, from, to);
+
+        // mapToResponse() is called inside this transaction while the Hibernate
+        // session is still open, so all lazy proxies (Branch, Item, User) resolve
+        // correctly — no "could not initialize proxy - no session" 500 error.
+        return transferRequestRepository
+                .findForHistoryReport(branchId, ts, itemId, from, to)
+                .stream()
+                .map(transferService::mapToResponse)
+                .toList();
     }
 
     @Transactional(readOnly = true)
-    public byte[] exportTransferHistoryReportCsv(Long branchId, String status,
-            Long itemId, String fromDate, String toDate) {
+    public byte[] exportTransferHistoryReportCsv(
+            Long branchId, String status, Long itemId,
+            String fromDate, String toDate) {
         LocalDate from = fromDate != null ? LocalDate.parse(fromDate) : null;
         LocalDate to = toDate != null ? LocalDate.parse(toDate) : null;
         TransferStatus ts = status != null ? TransferStatus.valueOf(status) : null;
@@ -88,11 +138,14 @@ public class ReportService {
         return sw.toString().getBytes();
     }
 
+    // ── Low Stock Report ──────────────────────────────────────────────────────
+
     @Transactional(readOnly = true)
-    public Object getLowStockReport(Long branchId, String category) {
-        return branchId != null
+    public List<StockLevelResponse> getLowStockReport(Long branchId, String category) {
+        List<StockLevel> stocks = branchId != null
                 ? stockLevelRepository.findLowStockByBranchAndCategory(branchId, category)
                 : stockLevelRepository.findAllLowStockByCategory(category);
+        return stocks.stream().map(this::toStockResponse).toList();
     }
 
     @Transactional(readOnly = true)

@@ -56,6 +56,15 @@ public class User implements UserDetails {
     @Builder.Default
     private boolean active = true;
 
+    /**
+     * FR-REG: Self-registered users start inactive and pending approval.
+     * An ADMIN must approve them before they can log in.
+     * Set to false once approved (or for users created directly by an admin).
+     */
+    @Column(nullable = false)
+    @Builder.Default
+    private boolean pendingApproval = false;
+
     @Column(updatable = false)
     private LocalDateTime createdAt;
 
@@ -95,9 +104,13 @@ public class User implements UserDetails {
         return true;
     }
 
+    /**
+     * Locked if deactivated OR still pending admin approval.
+     * Spring Security returns 401 for locked accounts automatically.
+     */
     @Override
     public boolean isAccountNonLocked() {
-        return active;
+        return active && !pendingApproval;
     }
 
     @Override

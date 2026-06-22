@@ -7,6 +7,7 @@ import com.branch.inventory.backend.model.Item;
 import com.branch.inventory.backend.model.StockLevel;
 import com.branch.inventory.backend.model.TransferRequest;
 import com.branch.inventory.backend.model.User;
+import com.branch.inventory.backend.model.enums.Role;
 import com.branch.inventory.backend.model.enums.TransferStatus;
 import com.branch.inventory.backend.repository.BranchRepository;
 import com.branch.inventory.backend.repository.ItemRepository;
@@ -23,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -34,12 +36,15 @@ public class TransferService {
         private final ItemRepository itemRepository;
         private final UserRepository userRepository;
         private final AuditLogService auditLogService;
+        private final NotificationService notificationService;
 
         @Value("${app.approval.quantity-threshold:100}")
         private int quantityThreshold;
 
         @Value("${app.approval.value-threshold:500000}")
         private BigDecimal valueThreshold;
+
+        // ─── Create ──────────────────────────────────────────────────────────────
 
         @Transactional
         public TransferResponse createTransfer(CreateTransferRequest request, String email) {
@@ -91,19 +96,65 @@ public class TransferService {
                 auditLogService.log("TRANSFER_CREATED", "TransferRequest", saved.getId(), email,
                                 "Transfer request created. Requires HO approval: " + requiresHoApproval);
 
+                String notifTitle = "Transfer Request #" + saved.getId() + " Needs Approval";
+                String notifMessage = requester.getFullName() + " requested " + request.getQuantity()
+                                + "x " + item.getName() + " from " + sourceBranch.getName()
+                                + " → " + destBranch.getName() + ".";
+
+                if (requiresHoApproval) {
+                        // Large/high-value transfer: notify all HO admins
+                        userRepository.findByRole(Role.HO_ADMIN)
+                                        .forEach(admin -> notificationService.send(
+                                                        admin.getId(), notifTitle, notifMessage, "TRANSFER_PENDING"));
+                } else {
+                        // FIX: notify managers of the DESTINATION branch (the branch requesting stock),
+                        // not the source branch. The destination branch manager owns this approval —
+                        // they are requesting stock for their branch and need to confirm/approve it.
+                        userRepository.findByBranchIdAndRole(destBranch.getId(), Role.MANAGER)
+                                        .forEach(manager -> notificationService.send(
+                                                        manager.getId(), notifTitle, notifMessage, "TRANSFER_PENDING"));
+                }
+
                 return mapToResponse(saved);
         }
+
+        // ─── Read ─────────────────────────────────────────────────────────────────
 
         @Transactional(readOnly = true)
         public Page<TransferResponse> getTransfers(String email, Long branchId, String status,
                         Long itemId, String fromDate, String toDate, Pageable pageable) {
+
                 User user = getUser(email);
                 LocalDate from = fromDate != null ? LocalDate.parse(fromDate) : null;
                 LocalDate to = toDate != null ? LocalDate.parse(toDate) : null;
                 TransferStatus transferStatus = status != null ? TransferStatus.valueOf(status) : null;
 
+                User filterUser = null;
+                Long filterBranchId = branchId;
+
+                if (user.getRole() == Role.STAFF) {
+                        filterUser = user;
+                        filterBranchId = null;
+                } else if (user.getRole() == Role.MANAGER) {
+                        filterUser = null;
+                        if (filterBranchId == null && user.getBranch() != null) {
+                                filterBranchId = user.getBranch().getId();
+                        }
+                } else {
+                        filterUser = null;
+                }
+
                 return transferRequestRepository
-                                .findByFilters(user, branchId, transferStatus, itemId, from, to, pageable)
+                                .findByFilters(filterUser, filterBranchId, transferStatus,
+                                                itemId, from, to, pageable)
+                                .map(this::mapToResponse);
+        }
+
+        @Transactional(readOnly = true)
+        public Page<TransferResponse> getMyTransfers(String email, Pageable pageable) {
+                User user = getUser(email);
+                return transferRequestRepository
+                                .findByRequestedBy(user, pageable)
                                 .map(this::mapToResponse);
         }
 
@@ -112,9 +163,11 @@ public class TransferService {
                 return mapToResponse(getTransfer(id));
         }
 
+        // ─── Status Transitions ───────────────────────────────────────────────────
+
         @Transactional
         public TransferResponse markInTransit(Long id, String email) {
-                TransferRequest transfer = getTransfer(id);
+                TransferRequest transfer = getTransferWithDetails(id);
                 assertStatus(transfer, TransferStatus.HO_APPROVED, TransferStatus.MANAGER_APPROVED);
 
                 transfer.setStatus(TransferStatus.IN_TRANSIT);
@@ -122,12 +175,21 @@ public class TransferService {
                 transferRequestRepository.save(transfer);
 
                 auditLogService.log("MARKED_IN_TRANSIT", "TransferRequest", id, email, "Stock dispatched");
+
+                notificationService.send(
+                                transfer.getRequestedBy().getId(),
+                                "Transfer #" + id + " Is On Its Way",
+                                transfer.getQuantity() + "x " + transfer.getItem().getName()
+                                                + " has been dispatched from "
+                                                + transfer.getSourceBranch().getName() + ".",
+                                "TRANSFER_IN_TRANSIT");
+
                 return mapToResponse(transfer);
         }
 
         @Transactional
         public TransferResponse confirmReceipt(Long id, String email) {
-                TransferRequest transfer = getTransfer(id);
+                TransferRequest transfer = getTransferWithDetails(id);
                 assertStatus(transfer, TransferStatus.IN_TRANSIT);
 
                 StockLevel sourceStock = stockLevelRepository
@@ -143,7 +205,8 @@ public class TransferService {
 
                 StockLevel destStock = stockLevelRepository
                                 .findByBranchIdAndItemId(
-                                                transfer.getDestinationBranch().getId(), transfer.getItem().getId())
+                                                transfer.getDestinationBranch().getId(),
+                                                transfer.getItem().getId())
                                 .orElseGet(() -> StockLevel.builder()
                                                 .branch(transfer.getDestinationBranch())
                                                 .item(transfer.getItem())
@@ -162,6 +225,15 @@ public class TransferService {
 
                 auditLogService.log("RECEIPT_CONFIRMED", "TransferRequest", id, email,
                                 "Stock received. Levels updated on both branches.");
+
+                notificationService.send(
+                                transfer.getRequestedBy().getId(),
+                                "Transfer #" + id + " Completed",
+                                transfer.getQuantity() + "x " + transfer.getItem().getName()
+                                                + " has been received at "
+                                                + transfer.getDestinationBranch().getName() + ".",
+                                "TRANSFER_RECEIVED");
+
                 return mapToResponse(transfer);
         }
 
@@ -185,6 +257,92 @@ public class TransferService {
                 return mapToResponse(transfer);
         }
 
+        // ─── Approval ─────────────────────────────────────────────────────────────
+
+        @Transactional
+        public TransferResponse approveTransfer(Long id, String email) {
+                TransferRequest transfer = getTransferWithDetails(id);
+                assertStatus(transfer, TransferStatus.PENDING);
+
+                TransferStatus newStatus = transfer.isRequiresHoApproval()
+                                ? TransferStatus.HO_APPROVED
+                                : TransferStatus.MANAGER_APPROVED;
+
+                transfer.setStatus(newStatus);
+                transferRequestRepository.save(transfer);
+
+                auditLogService.log("TRANSFER_APPROVED", "TransferRequest", id, email, "Approved");
+
+                notificationService.send(
+                                transfer.getRequestedBy().getId(),
+                                "Transfer #" + id + " Approved",
+                                "Your request for " + transfer.getQuantity() + "x "
+                                                + transfer.getItem().getName() + " has been approved.",
+                                "TRANSFER_APPROVED");
+
+                return mapToResponse(transfer);
+        }
+
+        @Transactional
+        public TransferResponse rejectTransfer(Long id, String email, String reason) {
+                TransferRequest transfer = getTransferWithDetails(id);
+                assertStatus(transfer, TransferStatus.PENDING);
+
+                StockLevel stock = stockLevelRepository
+                                .findByBranchIdAndItemId(
+                                                transfer.getSourceBranch().getId(), transfer.getItem().getId())
+                                .orElseThrow(() -> new RuntimeException("Source stock record not found"));
+                stock.setReservedQuantity(stock.getReservedQuantity() - transfer.getQuantity());
+                stockLevelRepository.save(stock);
+
+                transfer.setStatus(TransferStatus.REJECTED);
+                transferRequestRepository.save(transfer);
+
+                auditLogService.log("TRANSFER_REJECTED", "TransferRequest", id, email,
+                                "Rejected. Reason: " + reason);
+
+                notificationService.send(
+                                transfer.getRequestedBy().getId(),
+                                "Transfer #" + id + " Rejected",
+                                "Your request for " + transfer.getQuantity() + "x "
+                                                + transfer.getItem().getName()
+                                                + " was rejected. Reason: " + reason,
+                                "TRANSFER_REJECTED");
+
+                return mapToResponse(transfer);
+        }
+
+        // ─── Ready to dispatch / Incoming ─────────────────────────────────────────
+
+        @Transactional(readOnly = true)
+        public Page<TransferResponse> getReadyToDispatch(String email, Pageable pageable) {
+                User user = getUser(email);
+                if (user.getBranch() == null)
+                        throw new RuntimeException("User is not assigned to a branch");
+                return transferRequestRepository
+                                .findBySourceBranchAndStatusIn(
+                                                user.getBranch(),
+                                                List.of(TransferStatus.HO_APPROVED,
+                                                                TransferStatus.MANAGER_APPROVED),
+                                                pageable)
+                                .map(this::mapToResponse);
+        }
+
+        @Transactional(readOnly = true)
+        public Page<TransferResponse> getIncomingTransfers(String email, Pageable pageable) {
+                User user = getUser(email);
+                if (user.getBranch() == null)
+                        throw new RuntimeException("User is not assigned to a branch");
+                return transferRequestRepository
+                                .findByDestinationBranchAndStatusIn(
+                                                user.getBranch(),
+                                                List.of(TransferStatus.IN_TRANSIT),
+                                                pageable)
+                                .map(this::mapToResponse);
+        }
+
+        // ─── Helpers ──────────────────────────────────────────────────────────────
+
         private void assertStatus(TransferRequest transfer, TransferStatus... allowed) {
                 for (TransferStatus s : allowed) {
                         if (transfer.getStatus() == s)
@@ -195,6 +353,11 @@ public class TransferService {
 
         private TransferRequest getTransfer(Long id) {
                 return transferRequestRepository.findById(id)
+                                .orElseThrow(() -> new RuntimeException("Transfer not found: " + id));
+        }
+
+        private TransferRequest getTransferWithDetails(Long id) {
+                return transferRequestRepository.findByIdWithDetails(id)
                                 .orElseThrow(() -> new RuntimeException("Transfer not found: " + id));
         }
 
@@ -213,7 +376,8 @@ public class TransferService {
                                 .orElseThrow(() -> new RuntimeException("Item not found: " + id));
         }
 
-        private TransferResponse mapToResponse(TransferRequest t) {
+        // ─── Package-private so ReportService can reuse it ────────────────────────
+        TransferResponse mapToResponse(TransferRequest t) {
                 return TransferResponse.builder()
                                 .id(t.getId())
                                 .sourceBranchId(t.getSourceBranch().getId())
@@ -228,7 +392,10 @@ public class TransferService {
                                 .justification(t.getJustification())
                                 .status(t.getStatus().name())
                                 .requiresHoApproval(t.isRequiresHoApproval())
+                                // Provides both email and full name so the frontend can display either
                                 .requestedByEmail(t.getRequestedBy().getEmail())
+                                .requestedByName(t.getRequestedBy().getFullName()) // FIX: was missing — caused null in
+                                                                                   // dashboard
                                 .requestedAt(t.getRequestedAt())
                                 .dispatchedAt(t.getDispatchedAt())
                                 .receivedAt(t.getReceivedAt())

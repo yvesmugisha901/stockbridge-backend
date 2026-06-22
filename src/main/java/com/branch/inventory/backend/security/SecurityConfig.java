@@ -44,12 +44,19 @@ public class SecurityConfig {
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/v1/auth/**").permitAll()
+                        // Public endpoints
+                        .requestMatchers(
+                                "/api/v1/auth/login",
+                                "/api/v1/auth/register")
+                        .permitAll()
                         .requestMatchers(
                                 "/swagger-ui/**",
                                 "/swagger-ui.html",
                                 "/v3/api-docs/**")
                         .permitAll()
+                        // Branches GET is public — needed for the register page dropdown
+                        .requestMatchers(HttpMethod.GET, "/api/v1/branches").permitAll()
+                        // Role-protected endpoints
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.POST, "/api/v1/branches/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/v1/branches/**").hasRole("ADMIN")
